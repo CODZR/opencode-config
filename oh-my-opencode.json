@@ -1,0 +1,36 @@
+{
+  "$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-opencode/master/assets/oh-my-opencode.schema.json",
+  "agents": {
+    "Sisyphus": {
+      "model": "openai/gpt-5.2-codex"
+    },
+    "Planner-Sisyphus": {
+      "model": "openai/gpt-5.2"
+    },
+    "oracle": {
+      "model": "openai/gpt-5.1-codex-max"
+    },
+    "librarian": {
+      "model": "opencode/glm-4.7-free"
+    },
+    "explore": {
+      "model": "opencode/glm-4.7-free"
+    },
+    "frontend-ui-ux-engineer": {
+      "model": "openai/gpt-5.1-codex-max"
+    },
+    "document-writer": {
+      "model": "openai/gpt-5.2"
+    },
+    "multimodal-looker": {
+      "model": "openai/gpt-5.2"
+    }
+  },
+  "ralph_loop": {
+    "enabled": true,
+    "default_max_iterations": 100
+  },
+  "background_task": {
+    "defaultConcurrency": 3
+  }
+}
