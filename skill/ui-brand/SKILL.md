@@ -120,8 +120,7 @@ Always at end of major completions.
 ───────────────────────────────────────────────────────────────
 
 **Also available:**
-- `/gsd-alternative-1` — description
-- `/gsd-alternative-2` — description
+- [List relevant options]
 
 ───────────────────────────────────────────────────────────────
 ```
