@@ -8,7 +8,7 @@ tools:
   glob: true
   write: true
   skill: true
-  color: "#00FFFF"
+  color: true
 ---
 
 <role>
