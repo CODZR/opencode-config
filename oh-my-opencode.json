@@ -1,29 +1,34 @@
 {
   "$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-opencode/master/assets/oh-my-opencode.schema.json",
   "agents": {
-    "Sisyphus": {
-      "model": "openai/gpt-5.2-codex"
+    "sisyphus": {
+      "model": "openai/gpt-5.2",
+      "variant": "high"
     },
-    "Atlas": {
-      "model": "openai/gpt-5.2-codex"
-    },
-    "Prometheus (Planner)": {
+    "atlas": {
       "model": "openai/gpt-5.2"
     },
-    "Metis (Plan Consultant)": {
-      "model": "openai/gpt-5.2"
+    "prometheus": {
+      "model": "openai/gpt-5.2",
+      "variant": "high"
     },
-    "Momus (Plan Reviewer)": {
-      "model": "openai/gpt-5.2"
+    "metis": {
+      "model": "openai/gpt-5.2",
+      "variant": "high"
+    },
+    "momus": {
+      "model": "openai/gpt-5.2",
+      "variant": "medium"
     },
     "oracle": {
-      "model": "openai/gpt-5.1-codex-max"
+      "model": "openai/gpt-5.2",
+      "variant": "high"
     },
     "librarian": {
-      "model": "openai/gpt-5.2"
+      "model": "opencode/big-pickle"
     },
     "explore": {
-      "model": "openai/gpt-5.2"
+      "model": "opencode/gpt-5-nano"
     },
     "frontend-ui-ux-engineer": {
       "model": "openai/gpt-5.1-codex-max"
@@ -37,9 +42,36 @@
   },
   "ralph_loop": {
     "enabled": true,
-    "default_max_iterations": 100
+    "default_max_iterations": 50
   },
   "background_task": {
     "defaultConcurrency": 3
+  },
+  "categories": {
+    "visual-engineering": {
+      "model": "openai/gpt-5.2",
+      "variant": "high"
+    },
+    "ultrabrain": {
+      "model": "openai/gpt-5.2-codex",
+      "variant": "xhigh"
+    },
+    "artistry": {
+      "model": "openai/gpt-5.2"
+    },
+    "quick": {
+      "model": "opencode/big-pickle"
+    },
+    "unspecified-low": {
+      "model": "openai/gpt-5.2-codex",
+      "variant": "medium"
+    },
+    "unspecified-high": {
+      "model": "openai/gpt-5.2-codex",
+      "variant": "medium"
+    },
+    "writing": {
+      "model": "openai/gpt-5.2"
+    }
   }
 }
