@@ -1,6 +1,6 @@
 {
   "plugin": [
-    "oh-my-opencode@latest"
+    "oh-my-opencode@3.1.6"
   ],
   "model": "openai/gpt-5.2-codex",
   "provider": {
@@ -50,7 +50,7 @@
               "reasoningEffort": "high",
               "reasoningSummary": "detailed",
               "textVerbosity": "medium"
-            },
+            }
           }
         },
         "gpt-5.2-codex": {
@@ -83,7 +83,7 @@
               "reasoningEffort": "high",
               "reasoningSummary": "detailed",
               "textVerbosity": "medium"
-            },
+            }
           }
         },
         "gpt-5.1-codex-max": {
@@ -116,7 +116,7 @@
               "reasoningEffort": "high",
               "reasoningSummary": "detailed",
               "textVerbosity": "medium"
-            },
+            }
           }
         }
       }
