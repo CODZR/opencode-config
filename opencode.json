@@ -9,8 +9,6 @@
       "options": {
         "baseURL": "https://codex-api.packycode.com/v1",
         "reasoningEffort": "medium",
-        "reasoningSummary": "auto",
-        "textVerbosity": "medium",
         "include": [
           "reasoning.encrypted_content"
         ],
@@ -53,11 +51,6 @@
               "reasoningSummary": "detailed",
               "textVerbosity": "medium"
             },
-            "xhigh": {
-              "reasoningEffort": "xhigh",
-              "reasoningSummary": "detailed",
-              "textVerbosity": "medium"
-            }
           }
         },
         "gpt-5.2-codex": {
@@ -91,11 +84,6 @@
               "reasoningSummary": "detailed",
               "textVerbosity": "medium"
             },
-            "xhigh": {
-              "reasoningEffort": "xhigh",
-              "reasoningSummary": "detailed",
-              "textVerbosity": "medium"
-            }
           }
         },
         "gpt-5.1-codex-max": {
@@ -129,11 +117,6 @@
               "reasoningSummary": "detailed",
               "textVerbosity": "medium"
             },
-            "xhigh": {
-              "reasoningEffort": "xhigh",
-              "reasoningSummary": "detailed",
-              "textVerbosity": "medium"
-            }
           }
         }
       }

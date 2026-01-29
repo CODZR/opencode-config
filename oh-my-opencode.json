@@ -2,19 +2,20 @@
   "$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-opencode/master/assets/oh-my-opencode.schema.json",
   "agents": {
     "sisyphus": {
-      "model": "openai/gpt-5.2",
-      "variant": "high"
+      "model": "openai/gpt-5.2-codex",
+      "variant": "medium"
     },
     "atlas": {
-      "model": "openai/gpt-5.2"
+      "model": "openai/gpt-5.2-codex",
+      "variant": "medium"
     },
     "prometheus": {
       "model": "openai/gpt-5.2",
-      "variant": "high"
+      "variant": "medium"
     },
     "metis": {
       "model": "openai/gpt-5.2",
-      "variant": "high"
+      "variant": "medium"
     },
     "momus": {
       "model": "openai/gpt-5.2",
@@ -22,22 +23,27 @@
     },
     "oracle": {
       "model": "openai/gpt-5.2",
-      "variant": "high"
+      "variant": "medium"
     },
     "librarian": {
-      "model": "opencode/big-pickle"
+      "model": "opencode/big-pickle",
+      "variant": "medium"
     },
     "explore": {
-      "model": "opencode/gpt-5-nano"
+      "model": "opencode/gpt-5-nano",
+      "variant": "medium"
     },
     "frontend-ui-ux-engineer": {
-      "model": "openai/gpt-5.1-codex-max"
+      "model": "openai/gpt-5.1-codex-max",
+      "variant": "medium"
     },
     "document-writer": {
-      "model": "openai/gpt-5.2"
+      "model": "openai/gpt-5.2",
+      "variant": "medium"
     },
     "multimodal-looker": {
-      "model": "openai/gpt-5.2"
+      "model": "openai/gpt-5.2",
+      "variant": "medium"
     }
   },
   "ralph_loop": {
@@ -50,14 +56,15 @@
   "categories": {
     "visual-engineering": {
       "model": "openai/gpt-5.2",
-      "variant": "high"
+      "variant": "medium"
     },
     "ultrabrain": {
       "model": "openai/gpt-5.2-codex",
-      "variant": "xhigh"
+      "variant": "medium"
     },
     "artistry": {
-      "model": "openai/gpt-5.2"
+      "model": "openai/gpt-5.2",
+      "variant": "medium"
     },
     "quick": {
       "model": "opencode/big-pickle"
@@ -71,7 +78,14 @@
       "variant": "medium"
     },
     "writing": {
-      "model": "openai/gpt-5.2"
+      "model": "openai/gpt-5.2",
+      "variant": "medium"
+    }
+  },
+  "lsp": {
+    "remark-language-server": {
+      "command": ["remark-language-server", "--stdio"],
+      "extensions": [".md", ".markdown"]
     }
   }
 }
