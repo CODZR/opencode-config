@@ -1,22 +1,13 @@
 {
+  "$schema": "https://opencode.ai/config.json",
+  "model": "openai/gpt-5.3-codex",
   "plugin": [
-    "oh-my-opencode@3.1.6"
+    "oh-my-opencode@3.4.0"
   ],
-  "model": "openai/gpt-5.2-codex",
   "provider": {
     "openai": {
-      "name": "OpenAI",
-      "options": {
-        "baseURL": "https://codex-api.packycode.com/v1",
-        "reasoningEffort": "medium",
-        "include": [
-          "reasoning.encrypted_content"
-        ],
-        "store": false
-      },
       "models": {
-        "gpt-5.2": {
-          "name": "GPT 5.2 (OAuth)",
+        "gpt-5.3": {
           "limit": {
             "context": 272000,
             "output": 128000
@@ -30,31 +21,31 @@
               "text"
             ]
           },
+          "name": "GPT 5.3 (OAuth)",
           "variants": {
+            "high": {
+              "reasoningEffort": "high",
+              "reasoningSummary": "detailed",
+              "textVerbosity": "medium"
+            },
+            "low": {
+              "reasoningEffort": "low",
+              "reasoningSummary": "auto",
+              "textVerbosity": "medium"
+            },
+            "medium": {
+              "reasoningEffort": "medium",
+              "reasoningSummary": "auto",
+              "textVerbosity": "medium"
+            },
             "none": {
               "reasoningEffort": "none",
               "reasoningSummary": "auto",
               "textVerbosity": "medium"
-            },
-            "low": {
-              "reasoningEffort": "low",
-              "reasoningSummary": "auto",
-              "textVerbosity": "medium"
-            },
-            "medium": {
-              "reasoningEffort": "medium",
-              "reasoningSummary": "auto",
-              "textVerbosity": "medium"
-            },
-            "high": {
-              "reasoningEffort": "high",
-              "reasoningSummary": "detailed",
-              "textVerbosity": "medium"
             }
           }
         },
-        "gpt-5.2-codex": {
-          "name": "GPT 5.2 Codex (OAuth)",
+        "gpt-5.3-codex": {
           "limit": {
             "context": 272000,
             "output": 128000
@@ -68,7 +59,13 @@
               "text"
             ]
           },
+          "name": "GPT 5.3 Codex (OAuth)",
           "variants": {
+            "high": {
+              "reasoningEffort": "high",
+              "reasoningSummary": "detailed",
+              "textVerbosity": "medium"
+            },
             "low": {
               "reasoningEffort": "low",
               "reasoningSummary": "auto",
@@ -77,50 +74,20 @@
             "medium": {
               "reasoningEffort": "medium",
               "reasoningSummary": "auto",
-              "textVerbosity": "medium"
-            },
-            "high": {
-              "reasoningEffort": "high",
-              "reasoningSummary": "detailed",
-              "textVerbosity": "medium"
-            }
-          }
-        },
-        "gpt-5.1-codex-max": {
-          "name": "GPT 5.1 Codex Max (OAuth)",
-          "limit": {
-            "context": 272000,
-            "output": 128000
-          },
-          "modalities": {
-            "input": [
-              "text",
-              "image"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "variants": {
-            "low": {
-              "reasoningEffort": "low",
-              "reasoningSummary": "detailed",
-              "textVerbosity": "medium"
-            },
-            "medium": {
-              "reasoningEffort": "medium",
-              "reasoningSummary": "detailed",
-              "textVerbosity": "medium"
-            },
-            "high": {
-              "reasoningEffort": "high",
-              "reasoningSummary": "detailed",
               "textVerbosity": "medium"
             }
           }
         }
+      },
+      "name": "OpenAI",
+      "options": {
+        "baseURL": "https://codex-api.packycode.com/v1",
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "setCacheKey": true,
+        "store": false
       }
     }
-  },
-  "$schema": "https://opencode.ai/config.json"
+  }
 }
