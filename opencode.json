@@ -7,7 +7,7 @@
   "provider": {
     "openai": {
       "models": {
-        "gpt-5.3": {
+        "gpt-5.2": {
           "limit": {
             "context": 272000,
             "output": 128000
@@ -21,7 +21,7 @@
               "text"
             ]
           },
-          "name": "GPT 5.3 (OAuth)",
+          "name": "GPT 5.2 (OAuth)",
           "variants": {
             "xhigh": {
               "reasoningEffort": "xhigh",
