@@ -2,7 +2,7 @@
   "$schema": "https://opencode.ai/config.json",
   "model": "openai/gpt-5.3-codex",
   "plugin": [
-    "oh-my-opencode@3.4.0"
+    "oh-my-opencode@latest"
   ],
   "provider": {
     "openai": {
@@ -23,15 +23,20 @@
           },
           "name": "GPT 5.3 (OAuth)",
           "variants": {
+            "xhigh": {
+              "reasoningEffort": "xhigh",
+              "reasoningSummary": "detailed",
+              "textVerbosity": "xhigh"
+            },
             "high": {
               "reasoningEffort": "high",
               "reasoningSummary": "detailed",
-              "textVerbosity": "medium"
+              "textVerbosity": "high"
             },
             "low": {
               "reasoningEffort": "low",
               "reasoningSummary": "auto",
-              "textVerbosity": "medium"
+              "textVerbosity": "low"
             },
             "medium": {
               "reasoningEffort": "medium",
@@ -41,7 +46,7 @@
             "none": {
               "reasoningEffort": "none",
               "reasoningSummary": "auto",
-              "textVerbosity": "medium"
+              "textVerbosity": "none"
             }
           }
         },
@@ -61,20 +66,30 @@
           },
           "name": "GPT 5.3 Codex (OAuth)",
           "variants": {
+            "xhigh": {
+              "reasoningEffort": "xhigh",
+              "reasoningSummary": "detailed",
+              "textVerbosity": "xhigh"
+            },
             "high": {
               "reasoningEffort": "high",
               "reasoningSummary": "detailed",
-              "textVerbosity": "medium"
+              "textVerbosity": "high"
             },
             "low": {
               "reasoningEffort": "low",
               "reasoningSummary": "auto",
-              "textVerbosity": "medium"
+              "textVerbosity": "low"
             },
             "medium": {
               "reasoningEffort": "medium",
               "reasoningSummary": "auto",
               "textVerbosity": "medium"
+            },
+            "none": {
+              "reasoningEffort": "none",
+              "reasoningSummary": "auto",
+              "textVerbosity": "none"
             }
           }
         }
