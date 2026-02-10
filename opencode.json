@@ -26,7 +26,7 @@
             "xhigh": {
               "reasoningEffort": "xhigh",
               "reasoningSummary": "detailed",
-              "textVerbosity": "xhigh"
+              "textVerbosity": "high"
             },
             "high": {
               "reasoningEffort": "high",
@@ -69,7 +69,7 @@
             "xhigh": {
               "reasoningEffort": "xhigh",
               "reasoningSummary": "detailed",
-              "textVerbosity": "xhigh"
+              "textVerbosity": "high"
             },
             "high": {
               "reasoningEffort": "high",
@@ -100,7 +100,6 @@
         "include": [
           "reasoning.encrypted_content"
         ],
-        "setCacheKey": true,
         "store": false
       }
     }
