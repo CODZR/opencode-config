@@ -1,0 +1,220 @@
+{
+  "task": "Task 5 hover leave timer QA evidence",
+  "scenario": "Hover leave starts 3000ms timer and dismisses after expiry",
+  "commands": [
+    "pkill -x Hammerspoon || true; open -a Hammerspoon; sleep 2",
+    "TOKEN=\"${OPENCODE_NOTIFY_TOKEN:-opencode-test-token}\"; curl -sS -m 2 -o /tmp/opencode-task8/health.json -w '%{http_code}' http://127.0.0.1:17342/opencode/health -H \"x-opencode-token: $TOKEN\"",
+    "curl -sS -m 2 -X POST http://127.0.0.1:17342/opencode/notify -H \"x-opencode-token: $TOKEN\" -H \"content-type: application/json\" -d '{\"id\":\"qa-hover-1\",\"message\":\"Hover timer\",\"subtitle\":\"Task5\"}'",
+    "curl -sS -m 2 -X POST http://127.0.0.1:17342/opencode/debug/hover -H \"x-opencode-token: $TOKEN\" -H \"content-type: application/json\" -d '{\"id\":\"qa-hover-1\",\"state\":\"enter\"}'",
+    "curl -sS -m 2 -X POST http://127.0.0.1:17342/opencode/debug/hover -H \"x-opencode-token: $TOKEN\" -H \"content-type: application/json\" -d '{\"id\":\"qa-hover-1\",\"state\":\"leave\"}'",
+    "sleep 2; curl -sS -m 2 http://127.0.0.1:17342/opencode/debug/state -H \"x-opencode-token: $TOKEN\" > /tmp/opencode-task8/hover_state_2s.json",
+    "sleep 2; curl -sS -m 2 http://127.0.0.1:17342/opencode/debug/state -H \"x-opencode-token: $TOKEN\" > /tmp/opencode-task8/hover_state_4s.json",
+    "jq -n --slurpfile enter /tmp/opencode-task8/hover_enter.json --slurpfile leave /tmp/opencode-task8/hover_leave.json --slurpfile s2 /tmp/opencode-task8/hover_state_2s.json --slurpfile s4 /tmp/opencode-task8/hover_state_4s.json '($enter[0].ok == true and $enter[0].timer.running == false and $leave[0].ok == true and $leave[0].timer.running == true and (($s2[0].active | map(.id) | index(\"qa-hover-1\")) != null) and (($s4[0].active | map(.id) | index(\"qa-hover-1\")) == null))'"
+  ],
+  "expected": {
+    "runtimePrerequisite": "Hammerspoon runtime reachable at 127.0.0.1:17342 with valid x-opencode-token header",
+    "behavior": [
+      "POST /opencode/notify creates qa-hover-1",
+      "POST /opencode/debug/hover enter keeps timer stopped",
+      "POST /opencode/debug/hover leave starts timer near 3000ms",
+      "At ~2s post-leave, qa-hover-1 is still present",
+      "At ~4s post-leave, qa-hover-1 is absent"
+    ]
+  },
+  "actual": {
+    "health": {
+      "http": 200,
+      "body": {
+        "ok": true
+      }
+    },
+    "notify": {
+      "activeCount": 5,
+      "id": "qa-hover-1",
+      "ok": true
+    },
+    "hoverEnter": {
+      "id": "qa-hover-1",
+      "ok": true,
+      "state": "enter",
+      "timer": {
+        "dueAtMs": 0,
+        "remainingMs": 0,
+        "running": false
+      }
+    },
+    "hoverLeave": {
+      "id": "qa-hover-1",
+      "ok": true,
+      "state": "leave",
+      "timer": {
+        "dueAtMs": 1770896192120,
+        "remainingMs": 2976,
+        "running": true
+      }
+    },
+    "stateAt2s": {
+      "present": true,
+      "payload": {
+        "active": [
+          {
+            "createdAtMs": 1770896189006,
+            "dismissAfterMs": 3000,
+            "hovered": false,
+            "id": "qa-hover-1",
+            "message": "Hover timer",
+            "subtitle": "Task5",
+            "timerState": "running"
+          },
+          {
+            "createdAtMs": 1770896188917,
+            "dismissAfterMs": 3000,
+            "hovered": false,
+            "id": "qa-burst-7",
+            "message": "Burst 7",
+            "subtitle": "Task8",
+            "timerState": "idle"
+          },
+          {
+            "createdAtMs": 1770896188832,
+            "dismissAfterMs": 3000,
+            "hovered": false,
+            "id": "qa-burst-6",
+            "message": "Burst 6",
+            "subtitle": "Task8",
+            "timerState": "idle"
+          },
+          {
+            "createdAtMs": 1770896188785,
+            "dismissAfterMs": 3000,
+            "hovered": false,
+            "id": "qa-burst-5",
+            "message": "Burst 5",
+            "subtitle": "Task8",
+            "timerState": "idle"
+          },
+          {
+            "createdAtMs": 1770896188747,
+            "dismissAfterMs": 3000,
+            "hovered": false,
+            "id": "qa-burst-4",
+            "message": "Burst 4",
+            "subtitle": "Task8",
+            "timerState": "idle"
+          }
+        ],
+        "nowMs": 1770896191167,
+        "ok": true,
+        "timers": [
+          {
+            "dueAtMs": 1770896192120,
+            "id": "qa-hover-1",
+            "remainingMs": 953,
+            "running": true
+          },
+          {
+            "dueAtMs": 0,
+            "id": "qa-burst-7",
+            "remainingMs": 0,
+            "running": false
+          },
+          {
+            "dueAtMs": 0,
+            "id": "qa-burst-6",
+            "remainingMs": 0,
+            "running": false
+          },
+          {
+            "dueAtMs": 0,
+            "id": "qa-burst-5",
+            "remainingMs": 0,
+            "running": false
+          },
+          {
+            "dueAtMs": 0,
+            "id": "qa-burst-4",
+            "remainingMs": 0,
+            "running": false
+          }
+        ]
+      }
+    },
+    "stateAt4s": {
+      "absent": true,
+      "payload": {
+        "active": [
+          {
+            "createdAtMs": 1770896188917,
+            "dismissAfterMs": 3000,
+            "hovered": false,
+            "id": "qa-burst-7",
+            "message": "Burst 7",
+            "subtitle": "Task8",
+            "timerState": "idle"
+          },
+          {
+            "createdAtMs": 1770896188832,
+            "dismissAfterMs": 3000,
+            "hovered": false,
+            "id": "qa-burst-6",
+            "message": "Burst 6",
+            "subtitle": "Task8",
+            "timerState": "idle"
+          },
+          {
+            "createdAtMs": 1770896188785,
+            "dismissAfterMs": 3000,
+            "hovered": false,
+            "id": "qa-burst-5",
+            "message": "Burst 5",
+            "subtitle": "Task8",
+            "timerState": "idle"
+          },
+          {
+            "createdAtMs": 1770896188747,
+            "dismissAfterMs": 3000,
+            "hovered": false,
+            "id": "qa-burst-4",
+            "message": "Burst 4",
+            "subtitle": "Task8",
+            "timerState": "idle"
+          }
+        ],
+        "nowMs": 1770896193197,
+        "ok": true,
+        "timers": [
+          {
+            "dueAtMs": 0,
+            "id": "qa-burst-7",
+            "remainingMs": 0,
+            "running": false
+          },
+          {
+            "dueAtMs": 0,
+            "id": "qa-burst-6",
+            "remainingMs": 0,
+            "running": false
+          },
+          {
+            "dueAtMs": 0,
+            "id": "qa-burst-5",
+            "remainingMs": 0,
+            "running": false
+          },
+          {
+            "dueAtMs": 0,
+            "id": "qa-burst-4",
+            "remainingMs": 0,
+            "running": false
+          }
+        ]
+      }
+    },
+    "assertions": {
+      "presentAtApprox2s": true,
+      "absentAtApprox4s": true,
+      "predicateViaJq": true
+    }
+  },
+  "status": "PASS"
+}

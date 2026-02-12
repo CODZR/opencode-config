@@ -1,0 +1,52 @@
+Task 7 QA Evidence
+Scenario: Logs expose decision path without raw command-trace noise
+
+Command(s):
+1) node --no-warnings --input-type=module <<'EOF' ...mixed event stream logging harness... EOF
+
+Expected:
+- Marker counts: suppressed-child=1, deduped=1, bridge-success=1, bridge-fallback=2, bridge-error=1
+- warningLogs=0 and errorLogs=0
+- Decision logs do not include raw command traces (no terminal-notifier or command -v in marker lines)
+
+Actual:
+{
+  "scenario": "decision-logs-noise-control",
+  "expected": {
+    "suppressedChild": 1,
+    "deduped": 1,
+    "bridgeSuccess": 1,
+    "bridgeFallback": 2,
+    "bridgeError": 1,
+    "warningLogs": 0,
+    "errorLogs": 0,
+    "commandTraceInDecisionLogs": false
+  },
+  "actual": {
+    "suppressedChild": 1,
+    "deduped": 1,
+    "bridgeSuccess": 1,
+    "bridgeFallback": 2,
+    "bridgeError": 1,
+    "warningLogs": 0,
+    "errorLogs": 0,
+    "commandTraceInDecisionLogs": false,
+    "decisionLogs": [
+      "[NotificationPlugin][decision] marker=suppressed-child sessionID=child-log reason=idle-event",
+      "[NotificationPlugin][decision] marker=bridge-success sessionID=root-log",
+      "[NotificationPlugin][decision] marker=deduped sessionID=root-log reason=idle-event",
+      "[NotificationPlugin][decision] marker=bridge-fallback sessionID=root-log reason=non-2xx",
+      "[NotificationPlugin][decision] marker=bridge-error sessionID=root-log reason=network-error",
+      "[NotificationPlugin][decision] marker=bridge-fallback sessionID=root-log reason=network-error"
+    ],
+    "fallbackCommands": [
+      "command -v terminal-notifier",
+      "terminal-notifier -title OpenCode -message 任务已完成，等你下一步指令。 -subtitle 项目：Task8-Logs -sound Pop -timeout 3 -group opencode-session-idle",
+      "command -v terminal-notifier",
+      "terminal-notifier -title OpenCode -message 任务已完成，等你下一步指令。 -subtitle 项目：Task8-Logs -sound Pop -timeout 3 -group opencode-session-idle"
+    ]
+  },
+  "status": "PASS"
+}
+
+Status: PASS

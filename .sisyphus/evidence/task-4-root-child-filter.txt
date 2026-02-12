@@ -1,0 +1,43 @@
+Task 4 QA Evidence
+Scenario: Root idle emits once; child idle emits none; duplicate idle is deduped
+
+Command(s):
+1) node --no-warnings --input-type=module <<'EOF' ...root/child + dedupe harness... EOF
+
+Expected:
+- Bridge dispatch count is exactly 1
+- Bridge dispatch session IDs are exactly ["root-1"]
+- Shell notifier command count is 0
+- Decision markers include suppressed-child, bridge-success, deduped
+
+Actual:
+{
+  "scenario": "root-idle-once-child-idle-none",
+  "expected": {
+    "bridgeCalls": 1,
+    "bridgeSessionIDs": [
+      "root-1"
+    ],
+    "shellCommands": 0,
+    "markers": [
+      "suppressed-child",
+      "bridge-success",
+      "deduped"
+    ]
+  },
+  "actual": {
+    "bridgeCalls": 1,
+    "bridgeSessionIDs": [
+      "root-1"
+    ],
+    "shellCommands": 0,
+    "markerLines": [
+      "[NotificationPlugin][decision] marker=suppressed-child sessionID=child-1 reason=idle-event",
+      "[NotificationPlugin][decision] marker=bridge-success sessionID=root-1",
+      "[NotificationPlugin][decision] marker=deduped sessionID=root-1 reason=idle-event"
+    ]
+  },
+  "status": "PASS"
+}
+
+Status: PASS

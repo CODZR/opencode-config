@@ -1,0 +1,124 @@
+{
+  "task": "Task 3 burst stack runtime QA evidence",
+  "scenario": "POST 7 notifications keeps maxVisible=5 with newest-first order",
+  "commands": [
+    "pkill -x Hammerspoon || true; open -a Hammerspoon; sleep 2",
+    "TOKEN=\"${OPENCODE_NOTIFY_TOKEN:-opencode-test-token}\"; curl -sS -m 2 -o /tmp/opencode-task8/health.json -w '%{http_code}' http://127.0.0.1:17342/opencode/health -H \"x-opencode-token: $TOKEN\"",
+    "for i in 1 2 3 4 5 6 7; do curl -sS -m 2 -o /tmp/opencode-task8/burst_notify_$i.json -w '%{http_code}' -X POST http://127.0.0.1:17342/opencode/notify -H \"x-opencode-token: $TOKEN\" -H \"content-type: application/json\" -d \"{\\\"id\\\":\\\"qa-burst-$i\\\",\\\"message\\\":\\\"Burst $i\\\",\\\"subtitle\\\":\\\"Task8\\\"}\"; done",
+    "curl -sS -m 2 http://127.0.0.1:17342/opencode/debug/state -H \"x-opencode-token: $TOKEN\" > /tmp/opencode-task8/burst_state.json",
+    "jq -e '.ok == true and (.active | length) == 5 and ([.active[].id] == [\"qa-burst-7\",\"qa-burst-6\",\"qa-burst-5\",\"qa-burst-4\",\"qa-burst-3\"]) and (.active[0].id == \"qa-burst-7\") and (.active[4].id == \"qa-burst-3\")' /tmp/opencode-task8/burst_state.json"
+  ],
+  "expected": {
+    "health": "HTTP 200 with {\"ok\":true}",
+    "behavior": [
+      "All seven notify requests return HTTP 200",
+      "Debug snapshot activeCount equals 5 after 7 posts",
+      "Active order is newest-first: qa-burst-7..qa-burst-3"
+    ]
+  },
+  "actual": {
+    "health": {
+      "http": 200,
+      "body": {
+        "ok": true
+      }
+    },
+    "notifyHttpCodes": {
+      "qa-burst-1": 200,
+      "qa-burst-2": 200,
+      "qa-burst-3": 200,
+      "qa-burst-4": 200,
+      "qa-burst-5": 200,
+      "qa-burst-6": 200,
+      "qa-burst-7": 200
+    },
+    "debugState": {
+      "active": [
+        {
+          "createdAtMs": 1770896188917,
+          "dismissAfterMs": 3000,
+          "hovered": false,
+          "id": "qa-burst-7",
+          "message": "Burst 7",
+          "subtitle": "Task8",
+          "timerState": "idle"
+        },
+        {
+          "createdAtMs": 1770896188832,
+          "dismissAfterMs": 3000,
+          "hovered": false,
+          "id": "qa-burst-6",
+          "message": "Burst 6",
+          "subtitle": "Task8",
+          "timerState": "idle"
+        },
+        {
+          "createdAtMs": 1770896188785,
+          "dismissAfterMs": 3000,
+          "hovered": false,
+          "id": "qa-burst-5",
+          "message": "Burst 5",
+          "subtitle": "Task8",
+          "timerState": "idle"
+        },
+        {
+          "createdAtMs": 1770896188747,
+          "dismissAfterMs": 3000,
+          "hovered": false,
+          "id": "qa-burst-4",
+          "message": "Burst 4",
+          "subtitle": "Task8",
+          "timerState": "idle"
+        },
+        {
+          "createdAtMs": 1770896188716,
+          "dismissAfterMs": 3000,
+          "hovered": false,
+          "id": "qa-burst-3",
+          "message": "Burst 3",
+          "subtitle": "Task8",
+          "timerState": "idle"
+        }
+      ],
+      "nowMs": 1770896188988,
+      "ok": true,
+      "timers": [
+        {
+          "dueAtMs": 0,
+          "id": "qa-burst-7",
+          "remainingMs": 0,
+          "running": false
+        },
+        {
+          "dueAtMs": 0,
+          "id": "qa-burst-6",
+          "remainingMs": 0,
+          "running": false
+        },
+        {
+          "dueAtMs": 0,
+          "id": "qa-burst-5",
+          "remainingMs": 0,
+          "running": false
+        },
+        {
+          "dueAtMs": 0,
+          "id": "qa-burst-4",
+          "remainingMs": 0,
+          "running": false
+        },
+        {
+          "dueAtMs": 0,
+          "id": "qa-burst-3",
+          "remainingMs": 0,
+          "running": false
+        }
+      ]
+    },
+    "assertions": {
+      "activeCountIs5": true,
+      "newestFirstOrderAfter7": true
+    }
+  },
+  "status": "PASS"
+}
