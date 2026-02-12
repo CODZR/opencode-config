@@ -10,6 +10,23 @@ const DECISION_REASON_TIMER_CONFIRM = "timer-confirm"
 const NOTIFICATION_SOUND_NAME = "Pop"
 const NOTIFICATION_AUTO_DISMISS_SECONDS = "3"
 const ROOT_STATE_UNKNOWN = "unknown"
+const NOTIFICATION_DEBUG_FLAG = (process.env.OPENCODE_NOTIFICATION_DEBUG || "").trim().toLowerCase()
+const NOTIFICATION_DECISION_LOG_ENABLED = ["1", "true", "yes", "on"].includes(NOTIFICATION_DEBUG_FLAG)
+
+const debugLog = (...args) => {
+  if (!NOTIFICATION_DECISION_LOG_ENABLED) return
+  console.log(...args)
+}
+
+const debugWarn = (...args) => {
+  if (!NOTIFICATION_DECISION_LOG_ENABLED) return
+  console.warn(...args)
+}
+
+const debugError = (...args) => {
+  if (!NOTIFICATION_DECISION_LOG_ENABLED) return
+  console.error(...args)
+}
 
 const escapeAppleScriptString = (value) => String(value)
   .replace(/\\/g, "\\\\")
@@ -43,7 +60,7 @@ const sendByTerminalNotifier = async ({ $, message, subtitle }) => {
     await $`terminal-notifier -title ${APP_TITLE} -message ${message} -subtitle ${subtitle} -sound ${NOTIFICATION_SOUND_NAME} -timeout ${NOTIFICATION_AUTO_DISMISS_SECONDS} -group opencode-session-idle`.quiet()
     return true
   } catch (err) {
-    console.warn("[NotificationPlugin] terminal-notifier 发送失败，降级到 osascript：", err)
+    debugWarn("[NotificationPlugin] terminal-notifier 发送失败，降级到 osascript：", err)
     return false
   }
 }
@@ -62,11 +79,12 @@ const sendMacNotification = async ({ $, message, subtitle }) => {
 }
 
 const logDecision = (marker, { sessionID, reason } = {}) => {
+  if (!NOTIFICATION_DECISION_LOG_ENABLED) return
   const details = []
   if (sessionID) details.push(`sessionID=${sessionID}`)
   if (reason) details.push(`reason=${reason}`)
   const suffix = details.length > 0 ? ` ${details.join(" ")}` : ""
-  console.log(`${DECISION_LOG_PREFIX} marker=${marker}${suffix}`)
+  debugLog(`${DECISION_LOG_PREFIX} marker=${marker}${suffix}`)
 }
 
 const resolveBridgeToken = ({ bridgeToken, notifyToken, token }) => {
@@ -229,7 +247,7 @@ export const NotificationPlugin = async ({ $, project, worktree, directory, brid
         await sendMacNotification({ $, message, subtitle })
       }
     } catch (err) {
-      console.error("[NotificationPlugin] 发送通知失败：", err)
+      debugError("[NotificationPlugin] 发送通知失败：", err)
     }
   }
 
@@ -260,7 +278,9 @@ export const NotificationPlugin = async ({ $, project, worktree, directory, brid
     }, IDLE_CONFIRMATION_DELAY_MS)
   }
 
-  console.log("[NotificationPlugin] 已加载，当前项目：", projectLabel)
+  if (NOTIFICATION_DECISION_LOG_ENABLED) {
+    debugLog("[NotificationPlugin] 已加载，当前项目：", projectLabel)
+  }
 
   return {
     event: async ({ event }) => {

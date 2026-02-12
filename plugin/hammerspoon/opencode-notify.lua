@@ -13,7 +13,7 @@ local CONFIG = {
 M.visualTokens = {
   font = {
     family = {
-      primary = "Avenir Next, PingFang SC, Hiragino Sans GB, sans-serif"
+      primary = ".SF Pro Text, SF Pro Text, PingFang SC, Hiragino Sans GB, sans-serif"
     },
     size = {
       label = 11,
@@ -37,46 +37,51 @@ M.visualTokens = {
     }
   },
   toast = {
-    width = 320,
-    minHeight = 72,
-    paddingX = 14,
-    paddingY = 12,
-    contentGap = 4,
-    radius = 12,
+    width = 336,
+    minHeight = 78,
+    paddingX = 16,
+    paddingY = 13,
+    contentGap = 6,
+    radius = 14,
     borderWidth = 1,
-    borderColor = "rgba(255, 255, 255, 0.16)",
+    borderAlpha = 0.26,
+    borderHoverAlpha = 0.34,
     opacityBackground = 0.92,
-    opacityBackgroundHover = 0.96,
-    labelOpacity = 0.62,
-    subtitleOpacity = 0.78,
-    accentBarWidth = 2,
-    accentBarOpacity = 0.4
+    opacityBackgroundHover = 0.95,
+    labelOpacity = 0.66,
+    subtitleOpacity = 0.82,
+    accentBarWidth = 3,
+    accentBarOpacity = 0.68,
+    accentInsetX = 8,
+    accentInsetY = 10,
+    contentInsetLeft = 14
   },
   color = {
-    surface = "#171A1F",
-    textPrimary = "#F5F7FA",
-    textSecondary = "#D0D5DD",
-    label = "#B8C0CC",
-    accentBar = "#7AA2F7"
+    surface = "#1A2230",
+    textPrimary = "#F7FAFF",
+    textSecondary = "#D6E1F0",
+    label = "#AAB6CA",
+    accentBar = "#8AB4FF",
+    border = "#ECF2FF"
   },
   shadow = {
     default = {
-      blurRadius = 24,
-      alpha = 0.24,
+      blurRadius = 30,
+      alpha = 0.2,
       offsetW = 0,
-      offsetH = 8
+      offsetH = 12
     },
     hover = {
-      blurRadius = 28,
-      alpha = 0.28,
+      blurRadius = 36,
+      alpha = 0.25,
       offsetW = 0,
-      offsetH = 10
+      offsetH = 14
     }
   },
   stack = {
     gap = 10,
-    marginTop = 20,
-    marginRight = 20,
+    marginTop = 22,
+    marginRight = 22,
     anchor = "top-right",
     newestOnTop = true,
     maxVisible = CONFIG.maxVisible
@@ -104,7 +109,10 @@ local VIEW = {
   marginRight = M.visualTokens.stack.marginRight,
   stackGap = M.visualTokens.stack.gap,
   accentWidth = M.visualTokens.toast.accentBarWidth,
-  messageCharsPerLine = 34
+  accentInsetX = M.visualTokens.toast.accentInsetX,
+  accentInsetY = M.visualTokens.toast.accentInsetY,
+  contentInsetLeft = M.visualTokens.toast.contentInsetLeft,
+  messageCharsPerLine = 36
 }
 
 local state = {
@@ -559,10 +567,14 @@ end
 local function makeToastElements(toast)
   local messageLines = toastMessageLines(toast)
   local cardHeight = toast.height
-  local contentWidth = VIEW.width - (VIEW.paddingX * 2)
+  local contentX = VIEW.paddingX + VIEW.contentInsetLeft
+  local contentWidth = VIEW.width - VIEW.paddingX - contentX
   local labelHeight = M.visualTokens.font.lineHeight.label
   local messageHeight = M.visualTokens.font.lineHeight.message * messageLines
   local subtitleHeight = M.visualTokens.font.lineHeight.subtitle
+  local accentHeight = math.max(18, cardHeight - (VIEW.accentInsetY * 2))
+  local accentY = math.floor((cardHeight - accentHeight) / 2)
+  local borderAlpha = toast.hovered and M.visualTokens.toast.borderHoverAlpha or M.visualTokens.toast.borderAlpha
 
   local labelY = VIEW.paddingY
   local messageY = labelY + labelHeight + VIEW.contentGap
@@ -585,19 +597,33 @@ local function makeToastElements(toast)
       action = "stroke",
       frame = { x = 0, y = 0, w = VIEW.width, h = cardHeight },
       roundedRectRadii = { xRadius = VIEW.radius, yRadius = VIEW.radius },
-      strokeColor = { white = 1, alpha = 0.16 },
+      strokeColor = toColor(M.visualTokens.color.border, borderAlpha),
       strokeWidth = VIEW.borderWidth
     },
     {
       type = "rectangle",
       action = "fill",
-      frame = { x = 0, y = 0, w = VIEW.accentWidth, h = cardHeight },
+      frame = { x = 1, y = 1, w = VIEW.width - 2, h = 1 },
+      fillColor = { white = 1, alpha = 0.06 }
+    },
+    {
+      type = "rectangle",
+      action = "fill",
+      frame = { x = VIEW.accentInsetX - 2, y = accentY - 2, w = VIEW.accentWidth + 4, h = accentHeight + 4 },
+      roundedRectRadii = { xRadius = VIEW.accentWidth + 2, yRadius = VIEW.accentWidth + 2 },
+      fillColor = toColor(M.visualTokens.color.accentBar, 0.14)
+    },
+    {
+      type = "rectangle",
+      action = "fill",
+      frame = { x = VIEW.accentInsetX, y = accentY, w = VIEW.accentWidth, h = accentHeight },
+      roundedRectRadii = { xRadius = VIEW.accentWidth, yRadius = VIEW.accentWidth },
       fillColor = toColor(M.visualTokens.color.accentBar, M.visualTokens.toast.accentBarOpacity)
     },
     {
       type = "text",
       action = "fill",
-      frame = { x = VIEW.paddingX, y = labelY, w = contentWidth, h = labelHeight },
+      frame = { x = contentX, y = labelY, w = contentWidth, h = labelHeight },
       text = VIEW.appLabel,
       textFont = M.visualTokens.font.family.primary,
       textSize = M.visualTokens.font.size.label,
@@ -608,7 +634,7 @@ local function makeToastElements(toast)
     {
       type = "text",
       action = "fill",
-      frame = { x = VIEW.paddingX, y = messageY, w = contentWidth, h = messageHeight },
+      frame = { x = contentX, y = messageY, w = contentWidth, h = messageHeight },
       text = tostring(toast.message),
       textFont = M.visualTokens.font.family.primary,
       textSize = M.visualTokens.font.size.message,
@@ -619,7 +645,7 @@ local function makeToastElements(toast)
     {
       type = "text",
       action = "fill",
-      frame = { x = VIEW.paddingX, y = subtitleY, w = contentWidth, h = subtitleHeight },
+      frame = { x = contentX, y = subtitleY, w = contentWidth, h = subtitleHeight },
       text = tostring(toast.subtitle),
       textFont = M.visualTokens.font.family.primary,
       textSize = M.visualTokens.font.size.subtitle,
