@@ -10,8 +10,13 @@ const DECISION_REASON_TIMER_CONFIRM = "timer-confirm"
 const NOTIFICATION_SOUND_NAME = "Pop"
 const NOTIFICATION_AUTO_DISMISS_SECONDS = "3"
 const ROOT_STATE_UNKNOWN = "unknown"
+const ERROR_LOG_PREFIX = "[NotificationPlugin][error]"
 const NOTIFICATION_DEBUG_FLAG = (process.env.OPENCODE_NOTIFICATION_DEBUG || "").trim().toLowerCase()
 const NOTIFICATION_DECISION_LOG_ENABLED = ["1", "true", "yes", "on"].includes(NOTIFICATION_DEBUG_FLAG)
+const IDLE_ELIGIBILITY_ELIGIBLE = "eligible"
+const IDLE_ELIGIBILITY_SUPPRESSED_CHILD = "suppressed-child"
+const IDLE_ELIGIBILITY_DEDUPED = "deduped"
+const IDLE_ELIGIBILITY_UNKNOWN_ROOT = "unknown-root"
 
 const debugLog = (...args) => {
   if (!NOTIFICATION_DECISION_LOG_ENABLED) return
@@ -23,9 +28,11 @@ const debugWarn = (...args) => {
   console.warn(...args)
 }
 
-const debugError = (...args) => {
-  if (!NOTIFICATION_DECISION_LOG_ENABLED) return
-  console.error(...args)
+const logError = (code, { sessionID, reason } = {}) => {
+  const details = [`code=${code}`]
+  if (sessionID) details.push(`sessionID=${sessionID}`)
+  if (reason) details.push(`reason=${reason}`)
+  console.error(`${ERROR_LOG_PREFIX} ${details.join(" ")}`)
 }
 
 const escapeAppleScriptString = (value) => String(value)
@@ -85,6 +92,22 @@ const logDecision = (marker, { sessionID, reason } = {}) => {
   if (reason) details.push(`reason=${reason}`)
   const suffix = details.length > 0 ? ` ${details.join(" ")}` : ""
   debugLog(`${DECISION_LOG_PREFIX} marker=${marker}${suffix}`)
+}
+
+const getIdleEligibility = (sessionState) => {
+  if (sessionState.isRoot === false) return IDLE_ELIGIBILITY_SUPPRESSED_CHILD
+  if (sessionState.notifiedSinceBusy) return IDLE_ELIGIBILITY_DEDUPED
+  if (sessionState.isRoot !== true) return IDLE_ELIGIBILITY_UNKNOWN_ROOT
+  return IDLE_ELIGIBILITY_ELIGIBLE
+}
+
+const handleIdleSkip = ({ eligibility, sessionState, sessionID, reason, clearTimer, clearPending }) => {
+  if (eligibility === IDLE_ELIGIBILITY_ELIGIBLE) return false
+  if (clearTimer && typeof clearPending === "function") clearPending(sessionState)
+  if (eligibility === IDLE_ELIGIBILITY_SUPPRESSED_CHILD || eligibility === IDLE_ELIGIBILITY_DEDUPED) {
+    logDecision(eligibility, { sessionID, reason })
+  }
+  return true
 }
 
 const resolveBridgeToken = ({ bridgeToken, notifyToken, token }) => {
@@ -203,20 +226,15 @@ export const NotificationPlugin = async ({ $, project, worktree, directory, brid
       return
     }
 
-    if (sessionState.isRoot === false) {
-      logDecision("suppressed-child", { sessionID, reason: DECISION_REASON_TIMER_CONFIRM })
-      clearPendingIdleTimer(sessionState)
-      return
-    }
-
-    if (sessionState.notifiedSinceBusy) {
-      logDecision("deduped", { sessionID, reason: DECISION_REASON_TIMER_CONFIRM })
-      clearPendingIdleTimer(sessionState)
-      return
-    }
-
-    if (sessionState.isRoot !== true) {
-      clearPendingIdleTimer(sessionState)
+    const eligibility = getIdleEligibility(sessionState)
+    if (handleIdleSkip({
+      eligibility,
+      sessionState,
+      sessionID,
+      reason: DECISION_REASON_TIMER_CONFIRM,
+      clearTimer: true,
+      clearPending: clearPendingIdleTimer
+    })) {
       return
     }
 
@@ -239,6 +257,7 @@ export const NotificationPlugin = async ({ $, project, worktree, directory, brid
       }
 
       if (bridgeResult.error) {
+        logError("bridge-request-failed", { sessionID, reason: bridgeResult.reason })
         logDecision("bridge-error", { sessionID, reason: bridgeResult.reason })
       }
 
@@ -247,7 +266,10 @@ export const NotificationPlugin = async ({ $, project, worktree, directory, brid
         await sendMacNotification({ $, message, subtitle })
       }
     } catch (err) {
-      debugError("[NotificationPlugin] 发送通知失败：", err)
+      logError("notify-session-idle-failed", {
+        sessionID,
+        reason: err?.name || "unknown"
+      })
     }
   }
 
@@ -258,18 +280,32 @@ export const NotificationPlugin = async ({ $, project, worktree, directory, brid
       clearPendingIdleTimer(sessionState)
       return
     }
-    if (sessionState.isRoot === false) {
-      clearPendingIdleTimer(sessionState)
-      logDecision("suppressed-child", { sessionID, reason: DECISION_REASON_IDLE_EVENT })
+    const eligibility = getIdleEligibility(sessionState)
+    if (eligibility === IDLE_ELIGIBILITY_SUPPRESSED_CHILD) {
+      handleIdleSkip({
+        eligibility,
+        sessionState,
+        sessionID,
+        reason: DECISION_REASON_IDLE_EVENT,
+        clearTimer: true,
+        clearPending: clearPendingIdleTimer
+      })
       return
     }
 
-    if (sessionState.notifiedSinceBusy) {
-      logDecision("deduped", { sessionID, reason: DECISION_REASON_IDLE_EVENT })
+    if (eligibility === IDLE_ELIGIBILITY_DEDUPED) {
+      handleIdleSkip({
+        eligibility,
+        sessionState,
+        sessionID,
+        reason: DECISION_REASON_IDLE_EVENT,
+        clearTimer: false,
+        clearPending: clearPendingIdleTimer
+      })
       return
     }
 
-    if (sessionState.isRoot !== true) return
+    if (eligibility !== IDLE_ELIGIBILITY_ELIGIBLE) return
 
     clearPendingIdleTimer(sessionState)
     sessionState.pendingIdleTimer = setTimeout(() => {

@@ -20,20 +20,10 @@ M.visualTokens = {
       message = 14,
       subtitle = 12
     },
-    weight = {
-      label = 500,
-      message = 600,
-      subtitle = 400
-    },
     lineHeight = {
       label = 14,
       message = 20,
       subtitle = 16
-    },
-    letterSpacing = {
-      label = 0.2,
-      message = 0,
-      subtitle = 0
     }
   },
   toast = {
@@ -82,17 +72,7 @@ M.visualTokens = {
     gap = 10,
     marginTop = 22,
     marginRight = 22,
-    anchor = "top-right",
-    newestOnTop = true,
     maxVisible = CONFIG.maxVisible
-  },
-  motion = {
-    enterMs = 140,
-    reflowMs = 120,
-    hoverMs = 100,
-    enterEasing = "ease-out",
-    reflowEasing = "ease-out",
-    hoverEasing = "linear"
   }
 }
 
