@@ -8,7 +8,7 @@ const DECISION_LOG_PREFIX = "[NotificationPlugin][decision]"
 const DECISION_REASON_IDLE_EVENT = "idle-event"
 const DECISION_REASON_TIMER_CONFIRM = "timer-confirm"
 const NOTIFICATION_SOUND_NAME = "Pop"
-const NOTIFICATION_AUTO_DISMISS_SECONDS = "3"
+const NOTIFICATION_AUTO_DISMISS_SECONDS = "10"
 const ROOT_STATE_UNKNOWN = "unknown"
 const ERROR_LOG_PREFIX = "[NotificationPlugin][error]"
 const NOTIFICATION_DEBUG_FLAG = (process.env.OPENCODE_NOTIFICATION_DEBUG || "").trim().toLowerCase()
@@ -19,6 +19,10 @@ const SESSION_OUTCOME_ERROR = "error"
 const INTERRUPT_ERROR_NAME = "MessageAbortedError"
 const INTERRUPT_COMMAND_NAMES = new Set(["session.interrupt", "session.abort"])
 const BRIDGE_DISABLE_REASON_MISSING_TOKEN = "missing-token"
+const HAMMERSPOON_APP_NAME = "Hammerspoon"
+const HAMMERSPOON_BOOT_DELAY_MS = 350
+const BOOLEAN_TRUE_VALUES = new Set(["1", "true", "yes", "on"])
+const BOOLEAN_FALSE_VALUES = new Set(["0", "false", "no", "off"])
 const IDLE_ELIGIBILITY_ELIGIBLE = "eligible"
 const IDLE_ELIGIBILITY_SUPPRESSED_CHILD = "suppressed-child"
 const IDLE_ELIGIBILITY_DEDUPED = "deduped"
@@ -127,6 +131,26 @@ const resolveBridgeToken = ({ bridgeToken, notifyToken, token }) => {
   return ""
 }
 
+const sleep = (durationMs) => new Promise((resolve) => setTimeout(resolve, durationMs))
+
+const resolveBoolean = (value, fallback) => {
+  if (typeof value === "boolean") return value
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase()
+    if (BOOLEAN_TRUE_VALUES.has(normalized)) return true
+    if (BOOLEAN_FALSE_VALUES.has(normalized)) return false
+  }
+  return fallback
+}
+
+const resolveAutoStartDefault = () => {
+  const flag = (process.env.OPENCODE_NOTIFY_AUTOSTART_HAMMERSPOON || "").trim().toLowerCase()
+  if (!flag) return true
+  if (BOOLEAN_FALSE_VALUES.has(flag)) return false
+  if (BOOLEAN_TRUE_VALUES.has(flag)) return true
+  return true
+}
+
 const resolveNetworkErrorReason = (err) => {
   const networkCode = err?.cause?.code || err?.code
   if (typeof networkCode !== "string") return "network-error"
@@ -203,12 +227,29 @@ const sendByBridge = async ({ message, subtitle, sessionID, projectLabel, bridge
   }
 }
 
-export const NotificationPlugin = async ({ $, project, worktree, directory, bridgeToken, notifyToken, token }) => {
+export const NotificationPlugin = async ({
+  $,
+  project,
+  worktree,
+  directory,
+  bridgeToken,
+  notifyToken,
+  token,
+  autoStartHammerspoon: autoStartOption,
+  hammerspoonApp: hammerspoonAppOption
+}) => {
   let projectLabel = getProjectLabel({ project, worktree, directory })
   const sessionStateByID = new Map()
   const isDarwin = process.platform === "darwin"
+  const autoStartHammerspoon = resolveBoolean(autoStartOption, resolveAutoStartDefault())
+  const hammerspoonApp = typeof hammerspoonAppOption === "string"
+    && hammerspoonAppOption.trim()
+    ? hammerspoonAppOption.trim()
+    : HAMMERSPOON_APP_NAME
   const sharedBridgeToken = resolveBridgeToken({ bridgeToken, notifyToken, token })
   let bridgeDisabledReason = sharedBridgeToken ? "" : BRIDGE_DISABLE_REASON_MISSING_TOKEN
+  let initStartAttempted = false
+  let retryStartAttempted = false
 
   const getSessionState = (sessionID) => {
     if (!sessionID) return null
@@ -254,6 +295,24 @@ export const NotificationPlugin = async ({ $, project, worktree, directory, brid
   }
 
   const shouldTryBridge = () => !bridgeDisabledReason
+
+  const startHammerspoon = async (mode) => {
+    if (!isDarwin || !autoStartHammerspoon || !shouldTryBridge()) return false
+    if (mode === "init" && initStartAttempted) return true
+    if (mode === "retry" && retryStartAttempted) return true
+    if (mode === "init") initStartAttempted = true
+    if (mode === "retry") retryStartAttempted = true
+
+    try {
+      await $`open -g -a ${hammerspoonApp}`.quiet()
+      await sleep(HAMMERSPOON_BOOT_DELAY_MS)
+      logDecision("bridge-autostart", { reason: mode })
+      return true
+    } catch (err) {
+      logDecision("bridge-autostart-failed", { reason: err?.name || "unknown" })
+      return false
+    }
+  }
 
   const updateBridgeAvailability = ({ sessionID, reason }) => {
     if (!reason || bridgeDisabledReason) return
@@ -302,22 +361,37 @@ export const NotificationPlugin = async ({ $, project, worktree, directory, brid
         bridgeToken: sharedBridgeToken
       })
 
-      if (bridgeResult.ok) {
+      let resolvedBridgeResult = bridgeResult
+
+      if (resolvedBridgeResult.error && (resolvedBridgeResult.reason === "timeout" || resolvedBridgeResult.reason.startsWith("network-"))) {
+        const started = await startHammerspoon("retry")
+        if (started) {
+          resolvedBridgeResult = await sendByBridge({
+            message,
+            subtitle,
+            sessionID,
+            projectLabel,
+            bridgeToken: sharedBridgeToken
+          })
+        }
+      }
+
+      if (resolvedBridgeResult.ok) {
         logDecision("bridge-success", { sessionID })
         return
       }
 
-      if (bridgeResult.error) {
-        updateBridgeAvailability({ sessionID, reason: bridgeResult.reason })
+      if (resolvedBridgeResult.error) {
+        updateBridgeAvailability({ sessionID, reason: resolvedBridgeResult.reason })
       }
 
-      if (bridgeResult.error && !bridgeDisabledReason) {
-        logError("bridge-request-failed", { sessionID, reason: bridgeResult.reason })
-        logDecision("bridge-error", { sessionID, reason: bridgeResult.reason })
+      if (resolvedBridgeResult.error && !bridgeDisabledReason) {
+        logError("bridge-request-failed", { sessionID, reason: resolvedBridgeResult.reason })
+        logDecision("bridge-error", { sessionID, reason: resolvedBridgeResult.reason })
       }
 
-      logDecision("bridge-fallback", { sessionID, reason: bridgeResult.reason })
-      if (!bridgeResult.ok) {
+      logDecision("bridge-fallback", { sessionID, reason: resolvedBridgeResult.reason })
+      if (!resolvedBridgeResult.ok) {
         await sendMacNotification({ $, message, subtitle })
       }
     } catch (err) {
@@ -375,6 +449,8 @@ export const NotificationPlugin = async ({ $, project, worktree, directory, brid
       logDecision("bridge-skipped", { reason: BRIDGE_DISABLE_REASON_MISSING_TOKEN })
     }
   }
+
+  await startHammerspoon("init")
 
   return {
     event: async ({ event }) => {

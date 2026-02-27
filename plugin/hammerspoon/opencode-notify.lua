@@ -13,65 +13,65 @@ local CONFIG = {
 M.visualTokens = {
   font = {
     family = {
-      primary = ".SF Pro Text, SF Pro Text, PingFang SC, Hiragino Sans GB, sans-serif"
+      primary = ".SF Pro Text, PingFang SC, Hiragino Sans GB, sans-serif"
     },
     size = {
-      label = 11,
+      label = 12,
       message = 14,
       subtitle = 12
     },
     lineHeight = {
-      label = 14,
+      label = 16,
       message = 20,
-      subtitle = 16
+      subtitle = 17
     }
   },
   toast = {
-    width = 336,
-    minHeight = 78,
-    paddingX = 16,
-    paddingY = 13,
-    contentGap = 6,
-    radius = 14,
+    width = 344,
+    minHeight = 74,
+    paddingX = 14,
+    paddingY = 12,
+    contentGap = 5,
+    radius = 16,
     borderWidth = 1,
-    borderAlpha = 0.26,
-    borderHoverAlpha = 0.34,
-    opacityBackground = 0.92,
-    opacityBackgroundHover = 0.95,
-    labelOpacity = 0.66,
-    subtitleOpacity = 0.82,
-    accentBarWidth = 3,
-    accentBarOpacity = 0.68,
-    accentInsetX = 8,
-    accentInsetY = 10,
-    contentInsetLeft = 14
+    borderAlpha = 0.3,
+    borderHoverAlpha = 0.4,
+    opacityBackground = 0.94,
+    opacityBackgroundHover = 0.97,
+    labelOpacity = 0.72,
+    subtitleOpacity = 0.86,
+    accentDotSize = 8,
+    accentDotOpacity = 0.62,
+    accentInsetX = 12,
+    accentInsetY = 12,
+    contentInsetLeft = 18
   },
   color = {
-    surface = "#1A2230",
-    textPrimary = "#F7FAFF",
-    textSecondary = "#D6E1F0",
-    label = "#AAB6CA",
-    accentBar = "#8AB4FF",
-    border = "#ECF2FF"
+    surface = "#F8FAFF",
+    textPrimary = "#1F2937",
+    textSecondary = "#4B5563",
+    label = "#6B7280",
+    accentBar = "#4F46E5",
+    border = "#C7D2E5"
   },
   shadow = {
     default = {
-      blurRadius = 30,
-      alpha = 0.2,
+      blurRadius = 18,
+      alpha = 0.12,
       offsetW = 0,
-      offsetH = 12
+      offsetH = 6
     },
     hover = {
-      blurRadius = 36,
-      alpha = 0.25,
+      blurRadius = 22,
+      alpha = 0.16,
       offsetW = 0,
-      offsetH = 14
+      offsetH = 8
     }
   },
   stack = {
-    gap = 10,
-    marginTop = 22,
-    marginRight = 22,
+    gap = 8,
+    marginTop = 20,
+    marginRight = 20,
     maxVisible = CONFIG.maxVisible
   }
 }
@@ -88,11 +88,11 @@ local VIEW = {
   marginTop = M.visualTokens.stack.marginTop,
   marginRight = M.visualTokens.stack.marginRight,
   stackGap = M.visualTokens.stack.gap,
-  accentWidth = M.visualTokens.toast.accentBarWidth,
+  accentDotSize = M.visualTokens.toast.accentDotSize,
   accentInsetX = M.visualTokens.toast.accentInsetX,
   accentInsetY = M.visualTokens.toast.accentInsetY,
   contentInsetLeft = M.visualTokens.toast.contentInsetLeft,
-  messageCharsPerLine = 36
+  messageCharsPerLine = 34
 }
 
 local state = {
@@ -552,8 +552,9 @@ local function makeToastElements(toast)
   local labelHeight = M.visualTokens.font.lineHeight.label
   local messageHeight = M.visualTokens.font.lineHeight.message * messageLines
   local subtitleHeight = M.visualTokens.font.lineHeight.subtitle
-  local accentHeight = math.max(18, cardHeight - (VIEW.accentInsetY * 2))
-  local accentY = math.floor((cardHeight - accentHeight) / 2)
+  local dotDiameter = VIEW.accentDotSize
+  local dotX = VIEW.accentInsetX
+  local dotY = VIEW.accentInsetY + math.floor((labelHeight - dotDiameter) / 2)
   local borderAlpha = toast.hovered and M.visualTokens.toast.borderHoverAlpha or M.visualTokens.toast.borderAlpha
 
   local labelY = VIEW.paddingY
@@ -584,21 +585,19 @@ local function makeToastElements(toast)
       type = "rectangle",
       action = "fill",
       frame = { x = 1, y = 1, w = VIEW.width - 2, h = 1 },
-      fillColor = { white = 1, alpha = 0.06 }
+      fillColor = { white = 0, alpha = 0.03 }
     },
     {
-      type = "rectangle",
+      type = "oval",
       action = "fill",
-      frame = { x = VIEW.accentInsetX - 2, y = accentY - 2, w = VIEW.accentWidth + 4, h = accentHeight + 4 },
-      roundedRectRadii = { xRadius = VIEW.accentWidth + 2, yRadius = VIEW.accentWidth + 2 },
-      fillColor = toColor(M.visualTokens.color.accentBar, 0.14)
+      frame = { x = dotX - 2, y = dotY - 2, w = dotDiameter + 4, h = dotDiameter + 4 },
+      fillColor = toColor(M.visualTokens.color.accentBar, 0.08)
     },
     {
-      type = "rectangle",
+      type = "oval",
       action = "fill",
-      frame = { x = VIEW.accentInsetX, y = accentY, w = VIEW.accentWidth, h = accentHeight },
-      roundedRectRadii = { xRadius = VIEW.accentWidth, yRadius = VIEW.accentWidth },
-      fillColor = toColor(M.visualTokens.color.accentBar, M.visualTokens.toast.accentBarOpacity)
+      frame = { x = dotX, y = dotY, w = dotDiameter, h = dotDiameter },
+      fillColor = toColor(M.visualTokens.color.accentBar, M.visualTokens.toast.accentDotOpacity)
     },
     {
       type = "text",
