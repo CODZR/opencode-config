@@ -13,6 +13,12 @@ const ROOT_STATE_UNKNOWN = "unknown"
 const ERROR_LOG_PREFIX = "[NotificationPlugin][error]"
 const NOTIFICATION_DEBUG_FLAG = (process.env.OPENCODE_NOTIFICATION_DEBUG || "").trim().toLowerCase()
 const NOTIFICATION_DECISION_LOG_ENABLED = ["1", "true", "yes", "on"].includes(NOTIFICATION_DEBUG_FLAG)
+const SESSION_OUTCOME_COMPLETED = "completed"
+const SESSION_OUTCOME_INTERRUPTED = "interrupted"
+const SESSION_OUTCOME_ERROR = "error"
+const INTERRUPT_ERROR_NAME = "MessageAbortedError"
+const INTERRUPT_COMMAND_NAMES = new Set(["session.interrupt", "session.abort"])
+const BRIDGE_DISABLE_REASON_MISSING_TOKEN = "missing-token"
 const IDLE_ELIGIBILITY_ELIGIBLE = "eligible"
 const IDLE_ELIGIBILITY_SUPPRESSED_CHILD = "suppressed-child"
 const IDLE_ELIGIBILITY_DEDUPED = "deduped"
@@ -121,6 +127,23 @@ const resolveBridgeToken = ({ bridgeToken, notifyToken, token }) => {
   return ""
 }
 
+const resolveNetworkErrorReason = (err) => {
+  const networkCode = err?.cause?.code || err?.code
+  if (typeof networkCode !== "string") return "network-error"
+  const normalized = networkCode.trim().toLowerCase()
+  return normalized ? `network-${normalized}` : "network-error"
+}
+
+const getIdleMessageByOutcome = (sessionState) => {
+  if (sessionState?.lastOutcome === SESSION_OUTCOME_INTERRUPTED) {
+    return "任务已中断，等你下一步指令。"
+  }
+  if (sessionState?.lastOutcome === SESSION_OUTCOME_ERROR) {
+    return "任务异常结束，等你下一步指令。"
+  }
+  return "任务已完成，等你下一步指令。"
+}
+
 const sendByBridge = async ({ message, subtitle, sessionID, projectLabel, bridgeToken }) => {
   if (typeof fetch !== "function") {
     return { ok: false, error: false, reason: "fetch-unavailable" }
@@ -174,7 +197,7 @@ const sendByBridge = async ({ message, subtitle, sessionID, projectLabel, bridge
     if (err?.name === "AbortError") {
       return { ok: false, error: true, reason: "timeout" }
     }
-    return { ok: false, error: true, reason: "network-error" }
+    return { ok: false, error: true, reason: resolveNetworkErrorReason(err) }
   } finally {
     clearTimeout(timeout)
   }
@@ -185,6 +208,7 @@ export const NotificationPlugin = async ({ $, project, worktree, directory, brid
   const sessionStateByID = new Map()
   const isDarwin = process.platform === "darwin"
   const sharedBridgeToken = resolveBridgeToken({ bridgeToken, notifyToken, token })
+  let bridgeDisabledReason = sharedBridgeToken ? "" : BRIDGE_DISABLE_REASON_MISSING_TOKEN
 
   const getSessionState = (sessionID) => {
     if (!sessionID) return null
@@ -192,6 +216,7 @@ export const NotificationPlugin = async ({ $, project, worktree, directory, brid
       sessionStateByID.set(sessionID, {
         isRoot: ROOT_STATE_UNKNOWN,
         notifiedSinceBusy: false,
+        lastOutcome: SESSION_OUTCOME_COMPLETED,
         pendingIdleTimer: null
       })
     }
@@ -216,6 +241,26 @@ export const NotificationPlugin = async ({ $, project, worktree, directory, brid
     if (!sessionState) return
     clearPendingIdleTimer(sessionState)
     sessionState.notifiedSinceBusy = false
+    sessionState.lastOutcome = SESSION_OUTCOME_COMPLETED
+  }
+
+  const updateSessionOutcome = ({ sessionID, outcome, reason }) => {
+    const sessionState = getSessionState(sessionID)
+    if (!sessionState) return
+    sessionState.lastOutcome = outcome
+    if (outcome !== SESSION_OUTCOME_COMPLETED) {
+      logDecision(`outcome-${outcome}`, { sessionID, reason })
+    }
+  }
+
+  const shouldTryBridge = () => !bridgeDisabledReason
+
+  const updateBridgeAvailability = ({ sessionID, reason }) => {
+    if (!reason || bridgeDisabledReason) return
+    if (reason === "timeout" || reason.startsWith("network-")) {
+      bridgeDisabledReason = reason
+      logDecision("bridge-disabled", { sessionID, reason })
+    }
   }
 
   const notifySessionIdle = async ({ sessionID }) => {
@@ -241,8 +286,14 @@ export const NotificationPlugin = async ({ $, project, worktree, directory, brid
     sessionState.notifiedSinceBusy = true
 
     try {
-      const message = "任务已完成，等你下一步指令。"
+      const message = getIdleMessageByOutcome(sessionState)
       const subtitle = `项目：${projectLabel}`
+
+      if (!shouldTryBridge()) {
+        await sendMacNotification({ $, message, subtitle })
+        return
+      }
+
       const bridgeResult = await sendByBridge({
         message,
         subtitle,
@@ -257,6 +308,10 @@ export const NotificationPlugin = async ({ $, project, worktree, directory, brid
       }
 
       if (bridgeResult.error) {
+        updateBridgeAvailability({ sessionID, reason: bridgeResult.reason })
+      }
+
+      if (bridgeResult.error && !bridgeDisabledReason) {
         logError("bridge-request-failed", { sessionID, reason: bridgeResult.reason })
         logDecision("bridge-error", { sessionID, reason: bridgeResult.reason })
       }
@@ -316,6 +371,9 @@ export const NotificationPlugin = async ({ $, project, worktree, directory, brid
 
   if (NOTIFICATION_DECISION_LOG_ENABLED) {
     debugLog("[NotificationPlugin] 已加载，当前项目：", projectLabel)
+    if (bridgeDisabledReason === BRIDGE_DISABLE_REASON_MISSING_TOKEN) {
+      logDecision("bridge-skipped", { reason: BRIDGE_DISABLE_REASON_MISSING_TOKEN })
+    }
   }
 
   return {
@@ -335,6 +393,40 @@ export const NotificationPlugin = async ({ $, project, worktree, directory, brid
         return
       }
 
+      if (event.type === "session.error") {
+        const sessionID = event.properties?.sessionID || ""
+        const errorName = event.properties?.error?.name || ""
+
+        if (errorName === INTERRUPT_ERROR_NAME) {
+          updateSessionOutcome({
+            sessionID,
+            outcome: SESSION_OUTCOME_INTERRUPTED,
+            reason: errorName
+          })
+          return
+        }
+
+        updateSessionOutcome({
+          sessionID,
+          outcome: SESSION_OUTCOME_ERROR,
+          reason: errorName || "unknown"
+        })
+        return
+      }
+
+      if (event.type === "command.executed") {
+        const sessionID = event.properties?.sessionID || ""
+        const commandName = event.properties?.name || ""
+        if (INTERRUPT_COMMAND_NAMES.has(commandName)) {
+          updateSessionOutcome({
+            sessionID,
+            outcome: SESSION_OUTCOME_INTERRUPTED,
+            reason: commandName
+          })
+        }
+        return
+      }
+
       if (event.type === "session.status") {
         const sessionID = event.properties?.sessionID || ""
         const statusType = event.properties?.status?.type
@@ -344,9 +436,7 @@ export const NotificationPlugin = async ({ $, project, worktree, directory, brid
           return
         }
 
-        if (statusType === "idle") {
-          scheduleIdleConfirmation(sessionID)
-        }
+        if (statusType === "idle") return
 
         return
       }

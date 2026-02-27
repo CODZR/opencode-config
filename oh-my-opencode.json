@@ -1,10 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-opencode/master/assets/oh-my-opencode.schema.json",
   "agents": {
-    "sisyphus": {
-      "model": "openai/gpt-5.3-codex",
-      "variant": "xhigh"
-    },
     "hephaestus": {
       "model": "openai/gpt-5.3-codex",
       "variant": "xhigh"
@@ -41,6 +37,10 @@
       "model": "openai/gpt-5.3-codex",
       "variant": "xhigh"
     },
+    "sisyphus": {
+      "model": "openai/gpt-5.3-codex",
+      "variant": "xhigh"
+    },
     "sisyphus-junior": {
       "model": "openai/gpt-5.3-codex",
       "variant": "high"
@@ -67,10 +67,6 @@
       "model": "openai/gpt-5.3-codex",
       "variant": "high"
     },
-    "artistry": {
-      "model": "openai/gpt-5.3-codex",
-      "variant": "high"
-    },
     "quick": {
       "model": "openai/gpt-5.3-codex",
       "variant": "high"
@@ -84,6 +80,10 @@
       "variant": "high"
     },
     "writing": {
+      "model": "openai/gpt-5.3-codex",
+      "variant": "high"
+    },
+    "artistry": {
       "model": "openai/gpt-5.3-codex",
       "variant": "high"
     }
