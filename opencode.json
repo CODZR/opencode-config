@@ -1,20 +1,20 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "openai/gpt-5.3-codex",
-  "plugin": [
-    "oh-my-opencode@latest"
-  ],
   "mcp": {
     "chrome-devtools": {
-      "type": "local",
       "command": [
         "npx",
         "-y",
         "chrome-devtools-mcp@latest"
       ],
-      "enabled": true
+      "enabled": true,
+      "type": "local"
     }
   },
+  "model": "openai/gpt-5.3-codex",
+  "plugin": [
+    "oh-my-opencode@latest"
+  ],
   "provider": {
     "openai": {
       "models": {
@@ -34,11 +34,6 @@
           },
           "name": "GPT 5.2 (OAuth)",
           "variants": {
-            "xhigh": {
-              "reasoningEffort": "xhigh",
-              "reasoningSummary": "detailed",
-              "textVerbosity": "high"
-            },
             "high": {
               "reasoningEffort": "high",
               "reasoningSummary": "detailed",
@@ -58,6 +53,11 @@
               "reasoningEffort": "none",
               "reasoningSummary": "auto",
               "textVerbosity": "none"
+            },
+            "xhigh": {
+              "reasoningEffort": "xhigh",
+              "reasoningSummary": "detailed",
+              "textVerbosity": "high"
             }
           }
         },
@@ -77,11 +77,6 @@
           },
           "name": "GPT 5.3 Codex (OAuth)",
           "variants": {
-            "xhigh": {
-              "reasoningEffort": "xhigh",
-              "reasoningSummary": "detailed",
-              "textVerbosity": "high"
-            },
             "high": {
               "reasoningEffort": "high",
               "reasoningSummary": "detailed",
@@ -101,6 +96,11 @@
               "reasoningEffort": "none",
               "reasoningSummary": "auto",
               "textVerbosity": "none"
+            },
+            "xhigh": {
+              "reasoningEffort": "xhigh",
+              "reasoningSummary": "detailed",
+              "textVerbosity": "high"
             }
           }
         }

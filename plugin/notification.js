@@ -8,7 +8,7 @@ const DECISION_LOG_PREFIX = "[NotificationPlugin][decision]"
 const DECISION_REASON_IDLE_EVENT = "idle-event"
 const DECISION_REASON_TIMER_CONFIRM = "timer-confirm"
 const NOTIFICATION_SOUND_NAME = "Pop"
-const NOTIFICATION_AUTO_DISMISS_SECONDS = "10"
+const NOTIFICATION_AUTO_DISMISS_SECONDS = "1"
 const ROOT_STATE_UNKNOWN = "unknown"
 const ERROR_LOG_PREFIX = "[NotificationPlugin][error]"
 const NOTIFICATION_DEBUG_FLAG = (process.env.OPENCODE_NOTIFICATION_DEBUG || "").trim().toLowerCase()
@@ -23,6 +23,7 @@ const HAMMERSPOON_APP_NAME = "Hammerspoon"
 const HAMMERSPOON_BOOT_DELAY_MS = 350
 const BOOLEAN_TRUE_VALUES = new Set(["1", "true", "yes", "on"])
 const BOOLEAN_FALSE_VALUES = new Set(["0", "false", "no", "off"])
+const TASK_SUMMARY_MAX_CHARS = 26
 const IDLE_ELIGIBILITY_ELIGIBLE = "eligible"
 const IDLE_ELIGIBILITY_SUPPRESSED_CHILD = "suppressed-child"
 const IDLE_ELIGIBILITY_DEDUPED = "deduped"
@@ -151,6 +152,14 @@ const resolveAutoStartDefault = () => {
   return true
 }
 
+const normalizeTaskSummary = (value) => {
+  if (typeof value !== "string") return ""
+  const compact = value.replace(/\s+/g, " ").trim()
+  if (!compact) return ""
+  if (compact.length <= TASK_SUMMARY_MAX_CHARS) return compact
+  return `${compact.slice(0, TASK_SUMMARY_MAX_CHARS)}…`
+}
+
 const resolveNetworkErrorReason = (err) => {
   const networkCode = err?.cause?.code || err?.code
   if (typeof networkCode !== "string") return "network-error"
@@ -159,13 +168,14 @@ const resolveNetworkErrorReason = (err) => {
 }
 
 const getIdleMessageByOutcome = (sessionState) => {
+  const taskSummary = sessionState?.lastTaskSummary || "当前任务"
   if (sessionState?.lastOutcome === SESSION_OUTCOME_INTERRUPTED) {
-    return "任务已中断，等你下一步指令。"
+    return `已中断：${taskSummary}`
   }
   if (sessionState?.lastOutcome === SESSION_OUTCOME_ERROR) {
-    return "任务异常结束，等你下一步指令。"
+    return `异常结束：${taskSummary}`
   }
-  return "任务已完成，等你下一步指令。"
+  return `已完成：${taskSummary}`
 }
 
 const sendByBridge = async ({ message, subtitle, sessionID, projectLabel, bridgeToken }) => {
@@ -240,6 +250,7 @@ export const NotificationPlugin = async ({
 }) => {
   let projectLabel = getProjectLabel({ project, worktree, directory })
   const sessionStateByID = new Map()
+  const messageRoleByID = new Map()
   const isDarwin = process.platform === "darwin"
   const autoStartHammerspoon = resolveBoolean(autoStartOption, resolveAutoStartDefault())
   const hammerspoonApp = typeof hammerspoonAppOption === "string"
@@ -258,6 +269,7 @@ export const NotificationPlugin = async ({
         isRoot: ROOT_STATE_UNKNOWN,
         notifiedSinceBusy: false,
         lastOutcome: SESSION_OUTCOME_COMPLETED,
+        lastTaskSummary: "",
         pendingIdleTimer: null
       })
     }
@@ -292,6 +304,14 @@ export const NotificationPlugin = async ({
     if (outcome !== SESSION_OUTCOME_COMPLETED) {
       logDecision(`outcome-${outcome}`, { sessionID, reason })
     }
+  }
+
+  const updateSessionTaskSummary = ({ sessionID, summary }) => {
+    const sessionState = getSessionState(sessionID)
+    if (!sessionState) return
+    const normalized = normalizeTaskSummary(summary)
+    if (!normalized) return
+    sessionState.lastTaskSummary = normalized
   }
 
   const shouldTryBridge = () => !bridgeDisabledReason
@@ -460,6 +480,44 @@ export const NotificationPlugin = async ({
           worktree: event.properties?.worktree || worktree,
           directory
         })
+        return
+      }
+
+      if (event.type === "message.updated") {
+        const messageInfo = event.properties?.info
+        const messageID = messageInfo?.id || ""
+        const messageRole = messageInfo?.role || ""
+
+        if (messageID && messageRole) {
+          messageRoleByID.set(messageID, messageRole)
+        }
+
+        if (messageRole === "user") {
+          updateSessionTaskSummary({
+            sessionID: messageInfo?.sessionID || "",
+            summary: messageInfo?.summary?.title || messageInfo?.summary?.body || ""
+          })
+        }
+        return
+      }
+
+      if (event.type === "message.part.updated") {
+        const part = event.properties?.part
+        if (part?.type !== "text") return
+
+        const messageRole = messageRoleByID.get(part.messageID)
+        if (messageRole !== "user") return
+
+        updateSessionTaskSummary({
+          sessionID: part.sessionID || "",
+          summary: part.text || ""
+        })
+        return
+      }
+
+      if (event.type === "message.removed") {
+        const messageID = event.properties?.messageID || ""
+        if (messageID) messageRoleByID.delete(messageID)
         return
       }
 
