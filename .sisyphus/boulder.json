@@ -1,9 +1,10 @@
 {
-  "active_plan": "/Users/codzr/.config/opencode/.sisyphus/plans/hover-notification-root-session-filter.md",
-  "started_at": "2026-02-12T08:40:48.577Z",
+  "active_plan": "/Users/codzr/.config/opencode/.sisyphus/plans/codex-notify-launchagent.md",
+  "started_at": "2026-03-03T01:10:06.696Z",
   "session_ids": [
-    "ses_3af45bc9affeA8wbdWJ9mxIea2"
+    "ses_36343786dffe0nHfJ7EllxwyKQ"
   ],
-  "plan_name": "hover-notification-root-session-filter",
+  "plan_name": "codex-notify-launchagent",
+  "worktree_path": "/Users/codzr/.config/opencode",
   "agent": "atlas"
 }
