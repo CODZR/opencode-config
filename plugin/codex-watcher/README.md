@@ -30,6 +30,10 @@ SERVICE="gui/$(id -u)/$LABEL"
 - `EnvironmentVariables.PATH` priority: existing installed plist PATH when present; otherwise `$(dirname "$(command -v node)"):/usr/bin:/bin:/usr/sbin:/sbin` (or system fallback if `node` is unavailable). Node bin is prepended when available.
 - `EnvironmentVariables.CODEX_WATCHER_DEBOUNCE_MS` controls trailing debounce for completion notifications. Default is `3000` (ms), and `0` disables debounce (every completion notifies immediately).
 
+Notification enrichment behavior:
+- Completion `message` prefers the last `event_msg.payload.type=user_message` text associated to the same `task_started.turn_id`; if unavailable, it falls back to `task_complete.last_agent_message` normalization.
+- Completion `subtitle` appends cwd basename when stream context provides `turn_context.payload.cwd` or `session_meta.payload.cwd` (for example: `Codex 任务完成 · combination-flooding`).
+
 Optional post-install inspection:
 
 ```bash

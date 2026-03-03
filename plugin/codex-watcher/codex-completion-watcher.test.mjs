@@ -66,6 +66,45 @@ const makeEventLine = ({ envelopeType = "event_msg", payloadType = "task_complet
   }
 })
 
+const makeSessionMetaLine = (cwd) => JSON.stringify({
+  timestamp: "2026-03-03T00:00:00.000Z",
+  type: "session_meta",
+  payload: {
+    id: "session_test",
+    cwd
+  }
+})
+
+const makeTurnContextLine = ({ turnID = "turn_1", cwd = "/tmp/project" } = {}) => JSON.stringify({
+  timestamp: "2026-03-03T00:00:00.000Z",
+  type: "turn_context",
+  payload: {
+    turn_id: turnID,
+    cwd
+  }
+})
+
+const makeTaskStartedLine = (turnID) => JSON.stringify({
+  timestamp: "2026-03-03T00:00:00.000Z",
+  type: "event_msg",
+  payload: {
+    type: "task_started",
+    turn_id: turnID
+  }
+})
+
+const makeUserMessageLine = (message) => JSON.stringify({
+  timestamp: "2026-03-03T00:00:00.000Z",
+  type: "event_msg",
+  payload: {
+    type: "user_message",
+    message,
+    images: [],
+    local_images: [],
+    text_elements: []
+  }
+})
+
 const withTempDir = async (fn) => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-watcher-test-"))
   try {
@@ -646,6 +685,70 @@ test("checkpoint apply: state updates file checkpoint metadata keys", () => {
     offset: 99,
     mtimeMs: 1234
   })
+})
+
+test("context enrichment: applyJsonlTailToState associates task_started/user_message and cwd", () => {
+  const filePath = "/tmp/enriched.jsonl"
+  const result = applyJsonlTailToState({
+    state: createCheckpointState(),
+    filePath,
+    checkpoint: {
+      path: filePath,
+      inode: 1,
+      offset: 0,
+      mtimeMs: 1
+    },
+    lines: [
+      makeSessionMetaLine("/workspace/fallback-cwd"),
+      makeTaskStartedLine("turn_enriched"),
+      makeUserMessageLine("  investigate   flaky tests in worker queue  "),
+      makeTurnContextLine({ turnID: "turn_enriched", cwd: "/workspace/combination-flooding" }),
+      makeTaskCompleteLine("turn_enriched", "Codex：任务已完成")
+    ]
+  })
+
+  assert.equal(result.events.length, 1)
+  assert.equal(result.events[0].turnID, "turn_enriched")
+  assert.equal(result.events[0].taskSummary, "investigate flaky tests in worker queue")
+  assert.equal(result.events[0].cwd, "/workspace/combination-flooding")
+})
+
+test("notification enrichment: runWatcherCycle prefers task summary and appends cwd basename", async () => {
+  let persistedState = createCheckpointState()
+  const deliveredPayloads = []
+
+  const cycleResult = await runWatcherCycle({
+    bridgeToken: "token_enrichment",
+    debounceMs: 0,
+    subtitle: "Codex 任务完成",
+    loadState: async () => persistedState,
+    writeState: async ({ state }) => {
+      persistedState = state
+    },
+    listFiles: async () => ["/tmp/enrichment.jsonl"],
+    tailFileEvents: async ({ state }) => ({
+      state,
+      events: [
+        {
+          turnID: "turn_enrich_payload",
+          completionText: "Codex：任务已完成",
+          taskSummary: "fix flaky combination-flooding timeout",
+          cwd: "/Volumes/workspace/k2data/combination-flooding"
+        }
+      ],
+      didResetCheckpoint: false
+    }),
+    sendNotification: async ({ payload }) => {
+      deliveredPayloads.push(payload)
+      return { ok: true, statusCode: 200, attempts: 1 }
+    }
+  })
+
+  assert.equal(cycleResult.emittedEvents, 1)
+  assert.equal(cycleResult.deliveredNotifications, 1)
+  assert.equal(deliveredPayloads.length, 1)
+  assert.equal(deliveredPayloads[0].message, "fix flaky combination-flooding timeout")
+  assert.equal(deliveredPayloads[0].subtitle, "Codex 任务完成 · combination-flooding")
 })
 
 test("tail helper: readJsonlTailFromCheckpoint only returns newline-terminated lines", async () => {

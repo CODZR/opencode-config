@@ -805,13 +805,15 @@ local function parseNotifyPayload(body)
     return nil, "INVALID_BODY", "createdAtMs must be a non-negative integer"
   end
 
+  local hasExplicitId = payload.id ~= nil
   local toastId = payload.id or makeGeneratedId()
-  while state.activeById[toastId] do
+  while not hasExplicitId and state.activeById[toastId] do
     toastId = makeGeneratedId()
   end
 
   return {
     id = toastId,
+    hasExplicitId = hasExplicitId,
     message = payload.message,
     subtitle = payload.subtitle,
     createdAtMs = payload.createdAtMs or nowMs()
@@ -843,6 +845,20 @@ local function handleNotify(body)
   local payload, code, message = parseNotifyPayload(body)
   if not payload then
     return respondError(400, code, message)
+  end
+
+  local existing = payload.hasExplicitId and state.activeById[payload.id] or nil
+  if existing then
+    existing.message = payload.message
+    existing.subtitle = payload.subtitle
+    existing.createdAtMs = payload.createdAtMs
+    renderStack()
+
+    return respond(200, {
+      ok = true,
+      id = existing.id,
+      activeCount = #state.active
+    })
   end
 
   if #state.active >= CONFIG.maxVisible then

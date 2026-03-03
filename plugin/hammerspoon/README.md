@@ -11,6 +11,9 @@ Local runtime for hover-aware stacked toasts over HTTP.
 
 All endpoints require header `x-opencode-token`.
 
+- `POST /opencode/notify` with explicit `id` uses upsert behavior; posting the same `id` updates the existing toast instead of creating a duplicate card.
+- `POST /opencode/notify` without `id` still auto-generates a new id.
+
 ## Runtime Defaults
 
 - Bind address: `127.0.0.1:17342`

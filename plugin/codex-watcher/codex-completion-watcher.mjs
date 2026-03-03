@@ -34,6 +34,7 @@ export const WATCHER_INTERVAL_ENV_KEY = "CODEX_WATCHER_INTERVAL_MS"
 export const WATCHER_DEBOUNCE_ENV_KEY = "CODEX_WATCHER_DEBOUNCE_MS"
 export const WATCHER_DEBOUNCE_DEFAULT_MS = 3000
 export const WATCHER_SUBTITLE = "Codex 任务完成"
+const WATCHER_SUBTITLE_SEPARATOR = " · "
 
 const WATCHER_CONFIG_EXIT_CODE = 2
 
@@ -210,6 +211,27 @@ const normalizeCompletionMessage = (completionText) => {
   const truncated = normalized.slice(0, maxTextLength).trimEnd()
   if (truncated.length > 0) return `${truncated}${TASK_COMPLETE_MESSAGE_TRUNCATION_SUFFIX}`
   return TASK_COMPLETE_MESSAGE_FALLBACK
+}
+
+const normalizeTaskSummaryHint = (userMessage) => {
+  if (typeof userMessage !== "string") return ""
+  const normalized = userMessage.replace(/\s+/g, " ").trim()
+  if (!normalized) return ""
+  if (normalized.length <= TASK_COMPLETE_MESSAGE_MAX_LENGTH) return normalized
+  const suffixLength = TASK_COMPLETE_MESSAGE_TRUNCATION_SUFFIX.length
+  const maxTextLength = Math.max(1, TASK_COMPLETE_MESSAGE_MAX_LENGTH - suffixLength)
+  const truncated = normalized.slice(0, maxTextLength).trimEnd()
+  return truncated ? `${truncated}${TASK_COMPLETE_MESSAGE_TRUNCATION_SUFFIX}` : ""
+}
+
+const resolveSubtitleWithCwdBasename = ({ subtitle, cwd }) => {
+  const normalizedSubtitle = String(subtitle ?? "")
+  if (typeof cwd !== "string") return normalizedSubtitle
+  const normalizedCwd = cwd.trim()
+  if (!normalizedCwd) return normalizedSubtitle
+  const cwdBasename = path.basename(normalizedCwd) || normalizedCwd
+  if (!cwdBasename) return normalizedSubtitle
+  return `${normalizedSubtitle}${WATCHER_SUBTITLE_SEPARATOR}${cwdBasename}`
 }
 
 export const buildTaskCompleteNotificationPayload = ({ turnID, completionText, subtitle }) => ({
@@ -450,6 +472,16 @@ export const parseTaskCompleteEvent = (line) => {
   }
 }
 
+const parseJsonlLineRecord = (line) => {
+  if (typeof line !== "string") return null
+  try {
+    const parsed = JSON.parse(line)
+    return isObjectRecord(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
 const rememberTurnID = (state, turnID, turnIDWindowSize) => {
   if (!turnID) return
   const normalizedState = state
@@ -479,8 +511,40 @@ export const applyJsonlTailToState = ({
 
   const knownTurnIDs = new Set(normalizedState.recentTurnIds)
   const events = []
+  let sessionCwd = ""
+  let latestTaskStartedTurnID = ""
+  const userMessageByTurnID = new Map()
+  const turnCwdByTurnID = new Map()
 
   for (const line of lines) {
+    const parsedLine = parseJsonlLineRecord(line)
+    const lineType = parsedLine?.type
+    const linePayload = parsedLine?.payload
+
+    if (lineType === "session_meta" && isObjectRecord(linePayload)) {
+      const cwd = typeof linePayload.cwd === "string" ? linePayload.cwd.trim() : ""
+      if (cwd) sessionCwd = cwd
+    }
+
+    if (lineType === "turn_context" && isObjectRecord(linePayload)) {
+      const turnID = typeof linePayload.turn_id === "string" ? linePayload.turn_id.trim() : ""
+      const cwd = typeof linePayload.cwd === "string" ? linePayload.cwd.trim() : ""
+      if (turnID && cwd) turnCwdByTurnID.set(turnID, cwd)
+    }
+
+    if (lineType === CODEX_EVENT_ENVELOPE_TYPE && isObjectRecord(linePayload)) {
+      if (linePayload.type === "task_started") {
+        latestTaskStartedTurnID = typeof linePayload.turn_id === "string" ? linePayload.turn_id.trim() : ""
+      }
+
+      if (linePayload.type === "user_message") {
+        const normalizedTaskSummary = normalizeTaskSummaryHint(linePayload.message)
+        if (latestTaskStartedTurnID && normalizedTaskSummary) {
+          userMessageByTurnID.set(latestTaskStartedTurnID, normalizedTaskSummary)
+        }
+      }
+    }
+
     const event = parseTaskCompleteEvent(line)
     if (!event) continue
 
@@ -492,7 +556,14 @@ export const applyJsonlTailToState = ({
       knownTurnIDs.add(turnID)
     }
 
-    events.push(event)
+    const turnIDCwd = turnCwdByTurnID.get(turnID) || ""
+    const taskSummary = userMessageByTurnID.get(turnID) || ""
+
+    events.push({
+      ...event,
+      cwd: turnIDCwd || sessionCwd || "",
+      taskSummary
+    })
   }
 
   return {
@@ -636,8 +707,8 @@ export const runWatcherCycle = async ({
 
         const payload = buildTaskCompleteNotificationPayload({
           turnID: event.turnID,
-          completionText: event.completionText,
-          subtitle
+          completionText: event.taskSummary || event.completionText,
+          subtitle: resolveSubtitleWithCwdBasename({ subtitle, cwd: event.cwd })
         })
 
         if (debounceEnabled) {
