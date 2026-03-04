@@ -33,6 +33,7 @@ SERVICE="gui/$(id -u)/$LABEL"
 Notification enrichment behavior:
 - Completion `message` prefers the last `event_msg.payload.type=user_message` text associated to the same `task_started.turn_id`; if unavailable, it falls back to `task_complete.last_agent_message` normalization.
 - Completion `subtitle` appends cwd basename when stream context provides `turn_context.payload.cwd` or `session_meta.payload.cwd` (for example: `Codex 任务完成 · combination-flooding`).
+- When a `task_complete` event arrives without same-batch cwd context, watcher performs a lightweight session-file-head lookup for `session_meta.payload.cwd` and caches it in checkpoint state to keep repository hints stable across cycles.
 
 Optional post-install inspection:
 

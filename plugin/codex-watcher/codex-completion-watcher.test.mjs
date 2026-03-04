@@ -33,6 +33,7 @@ import {
   getBridgeNotifyEndpoint,
   listSessionJsonlFiles,
   parseTaskCompleteEvent,
+  readSessionMetaCwdFromFileHead,
   readJsonlTailFromCheckpoint,
   resolveWatcherConfigFromEnv,
   runWatcherCycle,
@@ -749,6 +750,118 @@ test("notification enrichment: runWatcherCycle prefers task summary and appends 
   assert.equal(deliveredPayloads.length, 1)
   assert.equal(deliveredPayloads[0].message, "fix flaky combination-flooding timeout")
   assert.equal(deliveredPayloads[0].subtitle, "Codex 任务完成 · combination-flooding")
+})
+
+test("notification enrichment: runWatcherCycle falls back to session_meta cwd when event cwd is missing", async () => {
+  let persistedState = createCheckpointState()
+  const deliveredPayloads = []
+  let readSessionMetaCalls = 0
+
+  const cycleResult = await runWatcherCycle({
+    bridgeToken: "token_enrichment_fallback",
+    debounceMs: 0,
+    subtitle: "Codex 任务完成",
+    loadState: async () => persistedState,
+    writeState: async ({ state }) => {
+      persistedState = state
+    },
+    listFiles: async () => ["/tmp/fallback-enrichment.jsonl"],
+    tailFileEvents: async ({ state }) => ({
+      state,
+      events: [
+        {
+          turnID: "turn_enrich_fallback",
+          completionText: "Codex：任务已完成",
+          taskSummary: "fix watcher subtitle repository hint",
+          cwd: ""
+        }
+      ],
+      didResetCheckpoint: false
+    }),
+    readSessionMetaCwd: async ({ filePath }) => {
+      readSessionMetaCalls += 1
+      assert.equal(filePath, "/tmp/fallback-enrichment.jsonl")
+      return "/Volumes/workspace/dzrlab/k3s-test"
+    },
+    sendNotification: async ({ payload }) => {
+      deliveredPayloads.push(payload)
+      return { ok: true, statusCode: 200, attempts: 1 }
+    }
+  })
+
+  assert.equal(cycleResult.emittedEvents, 1)
+  assert.equal(cycleResult.deliveredNotifications, 1)
+  assert.equal(readSessionMetaCalls, 1)
+  assert.equal(deliveredPayloads.length, 1)
+  assert.equal(deliveredPayloads[0].subtitle, "Codex 任务完成 · k3s-test")
+  assert.equal(
+    persistedState.fileSessionCwds["/tmp/fallback-enrichment.jsonl"],
+    "/Volumes/workspace/dzrlab/k3s-test"
+  )
+})
+
+test("notification enrichment: runWatcherCycle clears stale cached cwd when checkpoint resets", async () => {
+  let persistedState = createCheckpointState()
+  persistedState.fileSessionCwds["/tmp/reset-enrichment.jsonl"] = "/Volumes/workspace/old/repo-old"
+
+  const deliveredPayloads = []
+  let readSessionMetaCalls = 0
+
+  const cycleResult = await runWatcherCycle({
+    bridgeToken: "token_enrichment_reset",
+    debounceMs: 0,
+    subtitle: "Codex 任务完成",
+    loadState: async () => persistedState,
+    writeState: async ({ state }) => {
+      persistedState = state
+    },
+    listFiles: async () => ["/tmp/reset-enrichment.jsonl"],
+    tailFileEvents: async ({ state }) => ({
+      state,
+      events: [
+        {
+          turnID: "turn_enrich_reset",
+          completionText: "Codex：任务已完成",
+          taskSummary: "use new cwd after file reset",
+          cwd: ""
+        }
+      ],
+      didResetCheckpoint: true
+    }),
+    readSessionMetaCwd: async ({ filePath }) => {
+      readSessionMetaCalls += 1
+      assert.equal(filePath, "/tmp/reset-enrichment.jsonl")
+      return "/Volumes/workspace/new/repo-new"
+    },
+    sendNotification: async ({ payload }) => {
+      deliveredPayloads.push(payload)
+      return { ok: true, statusCode: 200, attempts: 1 }
+    }
+  })
+
+  assert.equal(cycleResult.emittedEvents, 1)
+  assert.equal(cycleResult.deliveredNotifications, 1)
+  assert.equal(readSessionMetaCalls, 1)
+  assert.equal(deliveredPayloads.length, 1)
+  assert.equal(deliveredPayloads[0].subtitle, "Codex 任务完成 · repo-new")
+  assert.equal(
+    persistedState.fileSessionCwds["/tmp/reset-enrichment.jsonl"],
+    "/Volumes/workspace/new/repo-new"
+  )
+})
+
+test("session meta parser: readSessionMetaCwdFromFileHead scans past leading non-meta lines", async () => {
+  await withTempDir(async (tempDir) => {
+    const sessionFile = path.join(tempDir, "session-meta-head.jsonl")
+    await fs.writeFile(
+      sessionFile,
+      `\n${JSON.stringify({ type: "event_msg", payload: { type: "token_count" } })}\n${makeSessionMetaLine("/workspace/fallback-from-second-line")}\n`,
+      "utf8"
+    )
+
+    const resolvedCwd = await readSessionMetaCwdFromFileHead({ filePath: sessionFile })
+    assert.equal(resolvedCwd, "/workspace/fallback-from-second-line")
+  })
 })
 
 test("tail helper: readJsonlTailFromCheckpoint only returns newline-terminated lines", async () => {

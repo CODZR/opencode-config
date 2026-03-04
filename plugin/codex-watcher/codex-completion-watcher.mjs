@@ -35,6 +35,7 @@ export const WATCHER_DEBOUNCE_ENV_KEY = "CODEX_WATCHER_DEBOUNCE_MS"
 export const WATCHER_DEBOUNCE_DEFAULT_MS = 3000
 export const WATCHER_SUBTITLE = "Codex 任务完成"
 const WATCHER_SUBTITLE_SEPARATOR = " · "
+const SESSION_META_FILE_HEAD_MAX_BYTES = 8192
 
 const WATCHER_CONFIG_EXIT_CODE = 2
 
@@ -292,8 +293,23 @@ export const createCheckpointState = () => ({
   version: CHECKPOINT_STATE_VERSION,
   files: {},
   recentTurnIds: [],
+  fileSessionCwds: {},
   pendingNotification: null
 })
+
+const normalizeFileSessionCwds = (fileSessionCwds) => {
+  if (!isObjectRecord(fileSessionCwds)) return {}
+
+  const normalized = {}
+  for (const [filePath, cwd] of Object.entries(fileSessionCwds)) {
+    if (!filePath || typeof cwd !== "string") continue
+    const normalizedCwd = cwd.trim()
+    if (!normalizedCwd) continue
+    normalized[filePath] = normalizedCwd
+  }
+
+  return normalized
+}
 
 const normalizePendingNotification = (pendingNotification) => {
   if (!isObjectRecord(pendingNotification)) return null
@@ -324,6 +340,7 @@ export const normalizeCheckpointState = (state) => {
     version: CHECKPOINT_STATE_VERSION,
     files: normalizedFiles,
     recentTurnIds: normalizeRecentTurnIds(state.recentTurnIds),
+    fileSessionCwds: normalizeFileSessionCwds(state.fileSessionCwds),
     pendingNotification: normalizePendingNotification(state.pendingNotification)
   }
 }
@@ -482,6 +499,68 @@ const parseJsonlLineRecord = (line) => {
   }
 }
 
+const extractSessionMetaCwdFromChunk = (chunkText) => {
+  if (typeof chunkText !== "string" || chunkText.length === 0) return ""
+  const normalizedChunk = chunkText.replace(/^\uFEFF/, "")
+
+  const candidateLines = normalizedChunk.split("\n")
+  for (const line of candidateLines) {
+    if (typeof line !== "string" || !line.trim()) continue
+
+    const parsedLine = parseJsonlLineRecord(line)
+    if (parsedLine?.type === "session_meta" && isObjectRecord(parsedLine.payload)) {
+      const parsedCwd = typeof parsedLine.payload.cwd === "string"
+        ? parsedLine.payload.cwd.trim()
+        : ""
+      if (parsedCwd) return parsedCwd
+    }
+
+    if (!/"type"\s*:\s*"session_meta"/.test(line)) continue
+
+    const cwdMatch = line.match(/"cwd"\s*:\s*"((?:\\.|[^"\\])*)"/)
+    if (!cwdMatch) continue
+
+    try {
+      const decoded = JSON.parse(`"${cwdMatch[1]}"`)
+      if (typeof decoded === "string" && decoded.trim()) return decoded.trim()
+    } catch {
+      continue
+    }
+  }
+
+  return ""
+}
+
+export const readSessionMetaCwdFromFileHead = async ({
+  filePath,
+  fsPromises = fs,
+  maxBytes = SESSION_META_FILE_HEAD_MAX_BYTES
+} = {}) => {
+  if (typeof filePath !== "string" || !filePath.trim()) return ""
+
+  try {
+    const fileHandle = await fsPromises.open(filePath, "r")
+    try {
+      const stat = await fileHandle.stat()
+      const boundedMaxBytes = Math.max(1, Math.trunc(sanitizeFiniteNumber(maxBytes, SESSION_META_FILE_HEAD_MAX_BYTES)))
+      const bytesToRead = Math.max(0, Math.min(stat.size, boundedMaxBytes))
+      if (bytesToRead === 0) return ""
+
+      const headBuffer = Buffer.allocUnsafe(bytesToRead)
+      const { bytesRead } = await fileHandle.read(headBuffer, 0, bytesToRead, 0)
+      if (bytesRead <= 0) return ""
+
+      const chunkText = headBuffer.subarray(0, bytesRead).toString("utf8")
+      return extractSessionMetaCwdFromChunk(chunkText)
+    } finally {
+      await fileHandle.close()
+    }
+  } catch (error) {
+    if (error?.code === "ENOENT") return ""
+    throw error
+  }
+}
+
 const rememberTurnID = (state, turnID, turnIDWindowSize) => {
   if (!turnID) return
   const normalizedState = state
@@ -511,7 +590,9 @@ export const applyJsonlTailToState = ({
 
   const knownTurnIDs = new Set(normalizedState.recentTurnIds)
   const events = []
-  let sessionCwd = ""
+  let sessionCwd = typeof normalizedState.fileSessionCwds[filePath] === "string"
+    ? normalizedState.fileSessionCwds[filePath]
+    : ""
   let latestTaskStartedTurnID = ""
   const userMessageByTurnID = new Map()
   const turnCwdByTurnID = new Map()
@@ -566,6 +647,10 @@ export const applyJsonlTailToState = ({
     })
   }
 
+  if (sessionCwd) {
+    normalizedState.fileSessionCwds[filePath] = sessionCwd
+  }
+
   return {
     state: normalizedState,
     events
@@ -581,6 +666,10 @@ export const tailFileTaskCompleteEvents = async ({
   const normalizedState = normalizeCheckpointState(state)
   const fileCheckpoint = normalizedState.files[filePath]
   const tailResult = await readJsonlTailFromCheckpoint({ filePath, checkpoint: fileCheckpoint, fsPromises })
+
+  if (tailResult.didResetCheckpoint === true) {
+    delete normalizedState.fileSessionCwds[filePath]
+  }
 
   const appliedResult = applyJsonlTailToState({
     state: normalizedState,
@@ -648,6 +737,7 @@ export const runWatcherCycle = async ({
   writeState = writeCheckpointStateAtomic,
   listFiles = listSessionJsonlFiles,
   tailFileEvents = tailFileTaskCompleteEvents,
+  readSessionMetaCwd = readSessionMetaCwdFromFileHead,
   sendNotification = sendBridgeNotification,
   debounceMs = WATCHER_DEBOUNCE_DEFAULT_MS,
   nowMs = () => Date.now()
@@ -700,15 +790,52 @@ export const runWatcherCycle = async ({
         state,
         fsPromises
       })
-      state = tailResult.state
+      state = normalizeCheckpointState(tailResult.state)
+
+      if (tailResult.didResetCheckpoint === true) {
+        delete state.fileSessionCwds[filePath]
+      }
+
+      let sessionCwdFallback = typeof state.fileSessionCwds[filePath] === "string"
+        ? state.fileSessionCwds[filePath]
+        : ""
+
+      const hasMissingEventCwd = tailResult.events.some((event) => {
+        const eventCwd = typeof event?.cwd === "string" ? event.cwd.trim() : ""
+        return !eventCwd
+      })
+
+      if (!sessionCwdFallback && hasMissingEventCwd) {
+        try {
+          const inferredCwd = await readSessionMetaCwd({ filePath, fsPromises })
+          if (typeof inferredCwd === "string" && inferredCwd.trim()) {
+            sessionCwdFallback = inferredCwd.trim()
+            state.fileSessionCwds[filePath] = sessionCwdFallback
+          }
+        } catch (error) {
+          cycleResult.errors.push({
+            kind: "session_context_read",
+            filePath,
+            message: toErrorMessage(error)
+          })
+        }
+      }
 
       for (const event of tailResult.events) {
         cycleResult.emittedEvents += 1
 
+        const eventCwd = typeof event.cwd === "string" ? event.cwd.trim() : ""
+        const resolvedEventCwd = eventCwd || sessionCwdFallback
+
+        if (resolvedEventCwd && !sessionCwdFallback) {
+          sessionCwdFallback = resolvedEventCwd
+          state.fileSessionCwds[filePath] = resolvedEventCwd
+        }
+
         const payload = buildTaskCompleteNotificationPayload({
           turnID: event.turnID,
           completionText: event.taskSummary || event.completionText,
-          subtitle: resolveSubtitleWithCwdBasename({ subtitle, cwd: event.cwd })
+          subtitle: resolveSubtitleWithCwdBasename({ subtitle, cwd: resolvedEventCwd })
         })
 
         if (debounceEnabled) {
