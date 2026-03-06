@@ -11,14 +11,14 @@
       "type": "local"
     }
   },
-  "model": "openai/gpt-5.3-codex",
+  "model": "openai/gpt-5.4",
   "plugin": [
     "oh-my-opencode@latest"
   ],
   "provider": {
     "openai": {
       "models": {
-        "gpt-5.2": {
+        "gpt-5.3-codex": {
           "limit": {
             "context": 272000,
             "output": 128000
@@ -32,7 +32,7 @@
               "text"
             ]
           },
-          "name": "GPT 5.2 (OAuth)",
+          "name": "GPT 5.3 Codex (OAuth)",
           "variants": {
             "high": {
               "reasoningEffort": "high",
@@ -61,7 +61,7 @@
             }
           }
         },
-        "gpt-5.3-codex": {
+        "gpt-5.4": {
           "limit": {
             "context": 272000,
             "output": 128000
@@ -75,7 +75,7 @@
               "text"
             ]
           },
-          "name": "GPT 5.3 Codex (OAuth)",
+          "name": "GPT 5.4 (OAuth)",
           "variants": {
             "high": {
               "reasoningEffort": "high",
