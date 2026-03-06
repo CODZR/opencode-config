@@ -6,6 +6,7 @@ local CONFIG = {
   tokenHeader = "x-opencode-token",
   maxVisible = 5,
   dismissAfterMs = 3000,
+  hoverDismissAfterMs = 1000,
   maxBodyBytes = 32768,
   generatedIdPrefix = "toast_17342_"
 }
@@ -499,18 +500,19 @@ local function stopTimerForToast(id)
   end
 end
 
-local function startDismissTimer(id)
+local function startDismissTimer(id, durationMs)
   local toast = state.activeById[id]
   if not toast then
     return nil
   end
 
+  local delayMs = math.max(1, math.floor(tonumber(durationMs) or CONFIG.dismissAfterMs))
   stopTimerForToast(id)
-  local dueAtMs = nowMs() + CONFIG.dismissAfterMs
+  local dueAtMs = nowMs() + delayMs
   local timerRecord = state.timers[id] or { running = false, dueAtMs = 0, handle = nil }
   timerRecord.running = true
   timerRecord.dueAtMs = dueAtMs
-  timerRecord.handle = hs.timer.doAfter(CONFIG.dismissAfterMs / 1000, function()
+  timerRecord.handle = hs.timer.doAfter(delayMs / 1000, function()
     removeToastById(id)
   end)
 
@@ -719,10 +721,13 @@ applyHoverState = function(id, hoverState)
 
   if hoverState == "enter" then
     toast.hovered = true
-    stopTimerForToast(id)
+    startDismissTimer(id, CONFIG.hoverDismissAfterMs)
   elseif hoverState == "leave" then
     toast.hovered = false
-    startDismissTimer(id)
+    local timerRecord = state.timers[id]
+    if not (timerRecord and timerRecord.running == true) then
+      startDismissTimer(id)
+    end
   else
     return nil, "INVALID_BODY", "state must be enter or leave"
   end
