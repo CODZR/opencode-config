@@ -18,7 +18,7 @@ All endpoints require header `x-opencode-token`.
 
 - Bind address: `127.0.0.1:17342`
 - Stack policy: newest on top, `maxVisible=5`, overflow evicts oldest visible toast
-- Hover policy: `enter` starts/restarts a short `1000ms` dismiss timer, `leave` only clears hover style (does not gate dismissal)
+- Hover policy: `enter` starts or preserves a short `1000ms` dismiss timer, `leave` only clears hover style and does not extend dismissal
 
 ## Visible Toast Behavior
 
@@ -81,7 +81,7 @@ curl -sS "$BASE/opencode/debug/state" -H "x-opencode-token: $TOKEN" \
   | jq -e '.ok == true and ([.active[].id] | index("qa-hover-1") != null)'
 ```
 
-Hover enter (start short 1000ms timer):
+Hover enter (start or preserve short 1000ms timer):
 
 ```bash
 curl -sS -X POST "$BASE/opencode/debug/hover" \
@@ -91,7 +91,7 @@ curl -sS -X POST "$BASE/opencode/debug/hover" \
   | jq -e '.ok == true and .timer.running == true and .timer.remainingMs <= 1000'
 ```
 
-Hover leave (clear visual hover state, timer keeps running):
+Hover leave (clear visual hover state, timer does not extend):
 
 ```bash
 curl -sS -X POST "$BASE/opencode/debug/hover" \
@@ -152,7 +152,7 @@ After `debug/hover` enter then leave for `qa-6`:
     { "id": "qa-6", "hovered": false, "timerState": "running" }
   ],
   "timers": [
-    { "id": "qa-6", "running": true, "dueAtMs": 1734200003000, "remainingMs": 3000 }
+    { "id": "qa-6", "running": true, "dueAtMs": 1734200001000, "remainingMs": 1000 }
   ]
 }
 ```

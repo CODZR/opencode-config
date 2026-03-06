@@ -123,6 +123,9 @@ local removeToastById
 local renderStack
 local applyHoverState
 
+local CANVAS_INDEX_BACKGROUND = 1
+local CANVAS_INDEX_BORDER = 2
+
 local function nowMs()
   return math.floor(hs.timer.secondsSinceEpoch() * 1000)
 end
@@ -419,6 +422,16 @@ local function shadowSpec(hovered)
   }
 end
 
+local function toastBackgroundFillColor(hovered)
+  local alpha = hovered and M.visualTokens.toast.opacityBackgroundHover or M.visualTokens.toast.opacityBackground
+  return toColor(M.visualTokens.color.surface, alpha)
+end
+
+local function toastBorderStrokeColor(hovered)
+  local alpha = hovered and M.visualTokens.toast.borderHoverAlpha or M.visualTokens.toast.borderAlpha
+  return toColor(M.visualTokens.color.border, alpha)
+end
+
 local function clamp(value, minValue, maxValue)
   if value < minValue then
     return minValue
@@ -557,13 +570,9 @@ local function makeToastElements(toast)
   local dotDiameter = VIEW.accentDotSize
   local dotX = VIEW.accentInsetX
   local dotY = VIEW.accentInsetY + math.floor((labelHeight - dotDiameter) / 2)
-  local borderAlpha = toast.hovered and M.visualTokens.toast.borderHoverAlpha or M.visualTokens.toast.borderAlpha
-
   local labelY = VIEW.paddingY
   local messageY = labelY + labelHeight + VIEW.contentGap
   local subtitleY = messageY + messageHeight + VIEW.contentGap
-
-  local backgroundAlpha = toast.hovered and M.visualTokens.toast.opacityBackgroundHover or M.visualTokens.toast.opacityBackground
 
   return {
     {
@@ -571,7 +580,7 @@ local function makeToastElements(toast)
       action = "fill",
       frame = { x = 0, y = 0, w = VIEW.width, h = cardHeight },
       roundedRectRadii = { xRadius = VIEW.radius, yRadius = VIEW.radius },
-      fillColor = toColor(M.visualTokens.color.surface, backgroundAlpha),
+      fillColor = toastBackgroundFillColor(toast.hovered),
       withShadow = true,
       shadow = shadowSpec(toast.hovered)
     },
@@ -580,7 +589,7 @@ local function makeToastElements(toast)
       action = "stroke",
       frame = { x = 0, y = 0, w = VIEW.width, h = cardHeight },
       roundedRectRadii = { xRadius = VIEW.radius, yRadius = VIEW.radius },
-      strokeColor = toColor(M.visualTokens.color.border, borderAlpha),
+      strokeColor = toastBorderStrokeColor(toast.hovered),
       strokeWidth = VIEW.borderWidth
     },
     {
@@ -644,6 +653,25 @@ local function makeToastElements(toast)
       trackMouseEnterExit = true
     }
   }
+end
+
+local function refreshToastAppearance(toast)
+  if not toast or not toast.canvas then
+    return
+  end
+
+  local background = toast.canvas[CANVAS_INDEX_BACKGROUND]
+  if type(background) == "table" then
+    background.fillColor = toastBackgroundFillColor(toast.hovered)
+    background.shadow = shadowSpec(toast.hovered)
+    toast.canvas[CANVAS_INDEX_BACKGROUND] = background
+  end
+
+  local border = toast.canvas[CANVAS_INDEX_BORDER]
+  if type(border) == "table" then
+    border.strokeColor = toastBorderStrokeColor(toast.hovered)
+    toast.canvas[CANVAS_INDEX_BORDER] = border
+  end
 end
 
 local function renderToast(toast, x, y)
@@ -719,22 +747,28 @@ applyHoverState = function(id, hoverState)
     return nil, "NOT_FOUND", "toast id not found"
   end
 
+  local timerRecord = state.timers[id]
+
   if hoverState == "enter" then
-    toast.hovered = true
-    startDismissTimer(id, CONFIG.hoverDismissAfterMs)
-  elseif hoverState == "leave" then
-    toast.hovered = false
-    local timerRecord = state.timers[id]
+    if not toast.hovered then
+      toast.hovered = true
+    end
     if not (timerRecord and timerRecord.running == true) then
-      startDismissTimer(id)
+      timerRecord = startDismissTimer(id, CONFIG.hoverDismissAfterMs)
+    end
+  elseif hoverState == "leave" then
+    if toast.hovered then
+      toast.hovered = false
+    end
+    if not (timerRecord and timerRecord.running == true) then
+      timerRecord = startDismissTimer(id, CONFIG.hoverDismissAfterMs)
     end
   else
     return nil, "INVALID_BODY", "state must be enter or leave"
   end
 
-  renderStack()
+  refreshToastAppearance(toast)
 
-  local timerRecord = state.timers[id]
   local running = timerRecord and timerRecord.running == true or false
   local dueAtMs = running and timerRecord.dueAtMs or 0
   local currentMs = nowMs()
