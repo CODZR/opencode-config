@@ -6,7 +6,6 @@ local CONFIG = {
   tokenHeader = "x-opencode-token",
   maxVisible = 5,
   dismissAfterMs = 3000,
-  hoverDismissAfterMs = 1000,
   maxBodyBytes = 32768,
   generatedIdPrefix = "toast_17342_"
 }
@@ -747,28 +746,25 @@ applyHoverState = function(id, hoverState)
     return nil, "NOT_FOUND", "toast id not found"
   end
 
-  local timerRecord = state.timers[id]
-
   if hoverState == "enter" then
-    if not toast.hovered then
-      toast.hovered = true
-    end
-    if not (timerRecord and timerRecord.running == true) then
-      timerRecord = startDismissTimer(id, CONFIG.hoverDismissAfterMs)
-    end
-  elseif hoverState == "leave" then
-    if toast.hovered then
-      toast.hovered = false
-    end
-    if not (timerRecord and timerRecord.running == true) then
-      timerRecord = startDismissTimer(id, CONFIG.hoverDismissAfterMs)
-    end
-  else
+    removeToastById(id)
+    return {
+      running = false,
+      dueAtMs = 0,
+      remainingMs = 0
+    }
+  end
+
+  if hoverState ~= "leave" then
     return nil, "INVALID_BODY", "state must be enter or leave"
   end
 
-  refreshToastAppearance(toast)
+  if toast.hovered then
+    toast.hovered = false
+    refreshToastAppearance(toast)
+  end
 
+  local timerRecord = state.timers[id]
   local running = timerRecord and timerRecord.running == true or false
   local dueAtMs = running and timerRecord.dueAtMs or 0
   local currentMs = nowMs()

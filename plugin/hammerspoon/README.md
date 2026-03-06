@@ -18,7 +18,7 @@ All endpoints require header `x-opencode-token`.
 
 - Bind address: `127.0.0.1:17342`
 - Stack policy: newest on top, `maxVisible=5`, overflow evicts oldest visible toast
-- Hover policy: `enter` starts or preserves a short `1000ms` dismiss timer, `leave` only clears hover style and does not extend dismissal
+- Hover policy: `enter` immediately dismisses the toast, `leave` only clears hover state if the toast still exists
 
 ## Visible Toast Behavior
 
@@ -81,24 +81,24 @@ curl -sS "$BASE/opencode/debug/state" -H "x-opencode-token: $TOKEN" \
   | jq -e '.ok == true and ([.active[].id] | index("qa-hover-1") != null)'
 ```
 
-Hover enter (start or preserve short 1000ms timer):
+Hover enter (immediately dismiss the toast):
 
 ```bash
 curl -sS -X POST "$BASE/opencode/debug/hover" \
   -H "x-opencode-token: $TOKEN" \
   -H "content-type: application/json" \
   -d '{"id":"qa-hover-1","state":"enter"}' \
-  | jq -e '.ok == true and .timer.running == true and .timer.remainingMs <= 1000'
+  | jq -e '.ok == true and .timer.running == false and .timer.remainingMs == 0'
 ```
 
-Hover leave (clear visual hover state, timer does not extend):
+Hover leave on an existing toast (no dismissal extension):
 
 ```bash
 curl -sS -X POST "$BASE/opencode/debug/hover" \
   -H "x-opencode-token: $TOKEN" \
   -H "content-type: application/json" \
   -d '{"id":"qa-hover-1","state":"leave"}' \
-  | jq -e '.ok == true and .timer.running == true and .timer.remainingMs <= 1000'
+  | jq -e '.ok == true and .timer.running == false and .timer.remainingMs == 0'
 ```
 
 ## Sample `/opencode/debug/state` Outputs
@@ -143,17 +143,13 @@ After posting six notifications (`qa-1..qa-6`), oldest eviction keeps five:
 }
 ```
 
-After `debug/hover` enter then leave for `qa-6`:
+After `debug/hover` enter for `qa-6`:
 
 ```json
 {
   "ok": true,
-  "active": [
-    { "id": "qa-6", "hovered": false, "timerState": "running" }
-  ],
-  "timers": [
-    { "id": "qa-6", "running": true, "dueAtMs": 1734200001000, "remainingMs": 1000 }
-  ]
+  "active": [],
+  "timers": []
 }
 ```
 
