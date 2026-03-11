@@ -1,7 +1,9 @@
 import os from "node:os"
 import path from "node:path"
 import { promises as fs } from "node:fs"
+import { execFile as execFileCallback } from "node:child_process"
 import { fileURLToPath } from "node:url"
+import { promisify } from "node:util"
 
 export const CODEX_EVENT_ENVELOPE_TYPE = "event_msg"
 export const CODEX_EVENT_PAYLOAD_KEY = "payload"
@@ -9,16 +11,14 @@ export const CODEX_TASK_COMPLETE_EVENT_TYPE = "task_complete"
 export const CODEX_TASK_COMPLETE_TURN_ID_KEY = "turn_id"
 export const CODEX_TASK_COMPLETE_MESSAGE_KEY = "last_agent_message"
 
-export const BRIDGE_NOTIFY_BASE_URL = "http://127.0.0.1:17342"
-export const BRIDGE_NOTIFY_PATH = "/opencode/notify"
-export const BRIDGE_TOKEN_HEADER = "x-opencode-token"
-export const BRIDGE_REQUEST_TIMEOUT_MS = 150
-export const BRIDGE_RETRY_MAX_ATTEMPTS = 3
-export const BRIDGE_RETRY_BACKOFF_MS = [40, 90]
+export const NOTIFIER_BINARY_NAME = "terminal-notifier"
+export const NOTIFIER_GROUP = "codex-task-complete"
+export const NOTIFIER_TITLE = "Codex"
+export const NOTIFIER_SOUND = "default"
 
-export const BRIDGE_PAYLOAD_ID_KEY = "id"
-export const BRIDGE_PAYLOAD_MESSAGE_KEY = "message"
-export const BRIDGE_PAYLOAD_SUBTITLE_KEY = "subtitle"
+export const NOTIFICATION_PAYLOAD_ID_KEY = "id"
+export const NOTIFICATION_PAYLOAD_MESSAGE_KEY = "message"
+export const NOTIFICATION_PAYLOAD_SUBTITLE_KEY = "subtitle"
 
 export const TASK_COMPLETE_MESSAGE_FALLBACK = "Codex：任务已完成"
 export const TASK_COMPLETE_MESSAGE_MAX_LENGTH = 200
@@ -29,178 +29,103 @@ export const CHECKPOINT_STATE_VERSION = 1
 export const TURN_ID_WINDOW_LIMIT = 128
 export const WATCHER_SESSIONS_ROOT = path.join(os.homedir(), ".codex", "sessions")
 export const WATCHER_LOOP_INTERVAL_MS = 1500
-export const WATCHER_TOKEN_ENV_KEY = "OPENCODE_NOTIFY_TOKEN"
-export const WATCHER_INTERVAL_ENV_KEY = "CODEX_WATCHER_INTERVAL_MS"
-export const WATCHER_DEBOUNCE_ENV_KEY = "CODEX_WATCHER_DEBOUNCE_MS"
+export const WATCHER_INTERVAL_ENV_KEY = "CODEX_NOTIFY_INTERVAL_MS"
+export const WATCHER_DEBOUNCE_ENV_KEY = "CODEX_NOTIFY_DEBOUNCE_MS"
 export const WATCHER_DEBOUNCE_DEFAULT_MS = 3000
 export const WATCHER_SUBTITLE = "Codex 任务完成"
+export const WATCHER_REPAIR_COMMAND = "brew install terminal-notifier"
 const WATCHER_SUBTITLE_SEPARATOR = " · "
 const SESSION_META_FILE_HEAD_MAX_BYTES = 8192
 
 const WATCHER_CONFIG_EXIT_CODE = 2
-
-export const getBridgeNotifyEndpoint = () => `${BRIDGE_NOTIFY_BASE_URL}${BRIDGE_NOTIFY_PATH}`
-
-const BRIDGE_SERVER_ERROR_MIN = 500
-const BRIDGE_SERVER_ERROR_MAX = 599
-const REDACTED_TOKEN_VALUE = "[redacted]"
+const WATCHER_MISSING_NOTIFIER_ERROR = `missing required ${NOTIFIER_BINARY_NAME}. Install it with: ${WATCHER_REPAIR_COMMAND}`
+const execFile = promisify(execFileCallback)
 
 const sleepWithTimer = (durationMs, setTimeoutImpl = setTimeout) => new Promise((resolve) => {
   setTimeoutImpl(resolve, Math.max(0, Math.trunc(sanitizeFiniteNumber(durationMs, 0))))
 })
 
-const redactTokenFromText = (text, token) => {
-  if (typeof text !== "string") return ""
-  if (typeof token !== "string" || token.length === 0) return text
-  return text.split(token).join(REDACTED_TOKEN_VALUE)
-}
-
-const classifyBridgeHttpStatus = (statusCode) => {
-  if (statusCode === 401) return "unauthorized"
-  if (statusCode === 415) return "unsupported_media_type"
-  if (statusCode >= BRIDGE_SERVER_ERROR_MIN && statusCode <= BRIDGE_SERVER_ERROR_MAX) return "server"
-  return "other_http"
-}
-
-const normalizeBridgeRetryBackoff = (retryBackoffMs) => {
-  if (!Array.isArray(retryBackoffMs) || retryBackoffMs.length === 0) return [0]
-  const normalized = retryBackoffMs
-    .map((value) => Math.max(0, Math.trunc(sanitizeFiniteNumber(value, 0))))
-    .filter((value) => Number.isFinite(value))
-  return normalized.length > 0 ? normalized : [0]
-}
-
-const shouldRetryBridgeRequest = ({ errorClass, statusCode, attempt, maxAttempts }) => {
-  if (attempt >= maxAttempts) return false
-  if (errorClass === "timeout" || errorClass === "network") return true
-  return statusCode >= BRIDGE_SERVER_ERROR_MIN && statusCode <= BRIDGE_SERVER_ERROR_MAX
-}
-
-const buildBridgeNotifyPayload = (payload) => ({
-  [BRIDGE_PAYLOAD_ID_KEY]: String(payload?.[BRIDGE_PAYLOAD_ID_KEY] ?? ""),
-  [BRIDGE_PAYLOAD_MESSAGE_KEY]: String(payload?.[BRIDGE_PAYLOAD_MESSAGE_KEY] ?? ""),
-  [BRIDGE_PAYLOAD_SUBTITLE_KEY]: String(payload?.[BRIDGE_PAYLOAD_SUBTITLE_KEY] ?? "")
+const buildNotificationPayload = (payload) => ({
+  [NOTIFICATION_PAYLOAD_ID_KEY]: String(payload?.[NOTIFICATION_PAYLOAD_ID_KEY] ?? ""),
+  [NOTIFICATION_PAYLOAD_MESSAGE_KEY]: String(payload?.[NOTIFICATION_PAYLOAD_MESSAGE_KEY] ?? ""),
+  [NOTIFICATION_PAYLOAD_SUBTITLE_KEY]: String(payload?.[NOTIFICATION_PAYLOAD_SUBTITLE_KEY] ?? "")
 })
 
-const buildBridgeError = ({ errorClass, statusCode = null, attempt, maxAttempts, reason, token }) => ({
-  class: errorClass,
-  statusCode,
-  attempt,
-  maxAttempts,
-  retryable: shouldRetryBridgeRequest({ errorClass, statusCode: statusCode ?? -1, attempt, maxAttempts }),
-  reason: redactTokenFromText(String(reason ?? ""), token)
+const buildNotificationError = (reason) => ({
+  reason: String(reason ?? "terminal-notifier failed")
 })
 
-export const deliverBridgeNotification = async ({
+export const getTerminalNotifierArguments = ({
   payload,
-  bridgeToken,
-  endpoint = getBridgeNotifyEndpoint(),
-  fetchImpl = globalThis.fetch,
-  timeoutMs = BRIDGE_REQUEST_TIMEOUT_MS,
-  maxAttempts = BRIDGE_RETRY_MAX_ATTEMPTS,
-  retryBackoffMs = BRIDGE_RETRY_BACKOFF_MS,
-  setTimeoutImpl = setTimeout,
-  clearTimeoutImpl = clearTimeout,
-  abortControllerFactory = () => new AbortController()
+  title = NOTIFIER_TITLE,
+  group = NOTIFIER_GROUP,
+  sound = NOTIFIER_SOUND
 } = {}) => {
-  if (typeof fetchImpl !== "function") {
+  const normalizedPayload = buildNotificationPayload(payload)
+  return [
+    "-title", String(title),
+    "-subtitle", normalizedPayload[NOTIFICATION_PAYLOAD_SUBTITLE_KEY],
+    "-message", normalizedPayload[NOTIFICATION_PAYLOAD_MESSAGE_KEY],
+    "-group", String(group),
+    "-sound", String(sound)
+  ]
+}
+
+export const resolveTerminalNotifierCommand = async ({
+  notifierBinary = NOTIFIER_BINARY_NAME,
+  execFileImpl = execFile
+} = {}) => {
+  try {
+    const result = await execFileImpl("/usr/bin/which", [String(notifierBinary)])
+    const commandPath = typeof result?.stdout === "string" ? result.stdout.trim() : ""
+    if (!commandPath) {
+      return {
+        ok: false,
+        exitCode: WATCHER_CONFIG_EXIT_CODE,
+        error: WATCHER_MISSING_NOTIFIER_ERROR
+      }
+    }
+
+    return {
+      ok: true,
+      command: commandPath
+    }
+  } catch {
     return {
       ok: false,
-      error: buildBridgeError({
-        errorClass: "network",
-        attempt: 1,
-        maxAttempts: 1,
-        reason: "fetch unavailable",
-        token: bridgeToken
-      })
+      exitCode: WATCHER_CONFIG_EXIT_CODE,
+      error: WATCHER_MISSING_NOTIFIER_ERROR
     }
-  }
-
-  const requestPayload = buildBridgeNotifyPayload(payload)
-  const totalAttempts = Math.max(1, Math.trunc(sanitizeFiniteNumber(maxAttempts, BRIDGE_RETRY_MAX_ATTEMPTS)))
-  const timeoutDurationMs = Math.max(1, Math.trunc(sanitizeFiniteNumber(timeoutMs, BRIDGE_REQUEST_TIMEOUT_MS)))
-  const backoffDurations = normalizeBridgeRetryBackoff(retryBackoffMs)
-
-  for (let attempt = 1; attempt <= totalAttempts; attempt += 1) {
-    let timeoutHandle = null
-    const abortController = typeof abortControllerFactory === "function" ? abortControllerFactory() : null
-
-    try {
-      if (abortController && typeof abortController.abort === "function") {
-        timeoutHandle = setTimeoutImpl(() => {
-          abortController.abort()
-        }, timeoutDurationMs)
-      }
-
-      const response = await fetchImpl(endpoint, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          [BRIDGE_TOKEN_HEADER]: String(bridgeToken ?? "")
-        },
-        body: JSON.stringify(requestPayload),
-        signal: abortController?.signal
-      })
-
-      if (response?.ok === true) {
-        return {
-          ok: true,
-          attempts: attempt,
-          statusCode: Number.isFinite(response?.status) ? response.status : 200,
-          payload: requestPayload
-        }
-      }
-
-      const statusCode = Number.isFinite(response?.status) ? response.status : 0
-      const errorClass = classifyBridgeHttpStatus(statusCode)
-      const error = buildBridgeError({
-        errorClass,
-        statusCode,
-        attempt,
-        maxAttempts: totalAttempts,
-        reason: `bridge status ${statusCode}`,
-        token: bridgeToken
-      })
-
-      if (!shouldRetryBridgeRequest({ errorClass, statusCode, attempt, maxAttempts: totalAttempts })) {
-        return { ok: false, attempts: attempt, error }
-      }
-    } catch (error) {
-      const errorClass = error?.name === "AbortError" ? "timeout" : "network"
-      const safeReason = redactTokenFromText(error?.message || error?.name || "request failed", bridgeToken)
-      const shapedError = buildBridgeError({
-        errorClass,
-        attempt,
-        maxAttempts: totalAttempts,
-        reason: safeReason,
-        token: bridgeToken
-      })
-
-      if (!shouldRetryBridgeRequest({ errorClass, statusCode: -1, attempt, maxAttempts: totalAttempts })) {
-        return { ok: false, attempts: attempt, error: shapedError }
-      }
-    } finally {
-      if (timeoutHandle !== null) clearTimeoutImpl(timeoutHandle)
-    }
-
-    const backoffIndex = Math.min(attempt - 1, backoffDurations.length - 1)
-    await sleepWithTimer(backoffDurations[backoffIndex], setTimeoutImpl)
-  }
-
-  return {
-    ok: false,
-    attempts: totalAttempts,
-    error: buildBridgeError({
-      errorClass: "network",
-      attempt: totalAttempts,
-      maxAttempts: totalAttempts,
-      reason: "bridge delivery exhausted retries",
-      token: bridgeToken
-    })
   }
 }
 
-export const sendBridgeNotification = deliverBridgeNotification
+export const sendTerminalNotification = async ({
+  payload,
+  notifierCommand = NOTIFIER_BINARY_NAME,
+  execFileImpl = execFile
+} = {}) => {
+  const normalizedPayload = buildNotificationPayload(payload)
+
+  try {
+    await execFileImpl(String(notifierCommand), getTerminalNotifierArguments({ payload: normalizedPayload }))
+    return {
+      ok: true,
+      command: String(notifierCommand),
+      payload: normalizedPayload
+    }
+  } catch (error) {
+    const stderr = typeof error?.stderr === "string" ? error.stderr.trim() : ""
+    const stdout = typeof error?.stdout === "string" ? error.stdout.trim() : ""
+    const errorMessage = error?.code === "ENOENT"
+      ? WATCHER_MISSING_NOTIFIER_ERROR
+      : stderr || stdout || error?.message || "terminal-notifier failed"
+
+    return {
+      ok: false,
+      error: buildNotificationError(errorMessage)
+    }
+  }
+}
 
 const normalizeCompletionMessage = (completionText) => {
   if (typeof completionText !== "string") return TASK_COMPLETE_MESSAGE_FALLBACK
@@ -236,9 +161,9 @@ const resolveSubtitleWithCwdBasename = ({ subtitle, cwd }) => {
 }
 
 export const buildTaskCompleteNotificationPayload = ({ turnID, completionText, subtitle }) => ({
-  id: String(turnID ?? ""),
-  message: normalizeCompletionMessage(completionText),
-  subtitle: String(subtitle ?? "")
+  [NOTIFICATION_PAYLOAD_ID_KEY]: String(turnID ?? ""),
+  [NOTIFICATION_PAYLOAD_MESSAGE_KEY]: normalizeCompletionMessage(completionText),
+  [NOTIFICATION_PAYLOAD_SUBTITLE_KEY]: String(subtitle ?? "")
 })
 
 const isObjectRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value)
@@ -314,7 +239,7 @@ const normalizeFileSessionCwds = (fileSessionCwds) => {
 const normalizePendingNotification = (pendingNotification) => {
   if (!isObjectRecord(pendingNotification)) return null
 
-  const payload = buildBridgeNotifyPayload(pendingNotification.payload)
+  const payload = buildNotificationPayload(pendingNotification.payload)
   if (!payload.id) return null
 
   const dueAtMs = Math.max(0, Math.trunc(sanitizeFiniteNumber(pendingNotification.dueAtMs, 0)))
@@ -728,7 +653,6 @@ export const listSessionJsonlFiles = async ({
 }
 
 export const runWatcherCycle = async ({
-  bridgeToken,
   sessionsRootPath = WATCHER_SESSIONS_ROOT,
   stateFilePath = WATCHER_STATE_FILE,
   subtitle = WATCHER_SUBTITLE,
@@ -738,16 +662,11 @@ export const runWatcherCycle = async ({
   listFiles = listSessionJsonlFiles,
   tailFileEvents = tailFileTaskCompleteEvents,
   readSessionMetaCwd = readSessionMetaCwdFromFileHead,
-  sendNotification = sendBridgeNotification,
+  sendNotification = sendTerminalNotification,
+  notifierCommand = NOTIFIER_BINARY_NAME,
   debounceMs = WATCHER_DEBOUNCE_DEFAULT_MS,
   nowMs = () => Date.now()
 } = {}) => {
-  if (typeof bridgeToken !== "string" || bridgeToken.trim() === "") {
-    const configError = new Error(`missing required ${WATCHER_TOKEN_ENV_KEY}`)
-    configError.code = "WATCHER_CONFIG"
-    throw configError
-  }
-
   const cycleResult = {
     scannedFiles: 0,
     emittedEvents: 0,
@@ -848,22 +767,22 @@ export const runWatcherCycle = async ({
         }
 
         try {
-          const notifyResult = await sendNotification({ payload, bridgeToken })
+          const notifyResult = await sendNotification({ payload, notifierCommand })
           if (notifyResult?.ok === true) {
             cycleResult.deliveredNotifications += 1
           } else {
             cycleResult.droppedNotifications += 1
             cycleResult.errors.push({
-              kind: "bridge_delivery",
+              kind: "notification_delivery",
               filePath,
               turnID: event.turnID,
-              message: toErrorMessage(notifyResult?.error?.reason || "bridge delivery failed")
+              message: toErrorMessage(notifyResult?.error?.reason || "notification delivery failed")
             })
           }
         } catch (error) {
           cycleResult.droppedNotifications += 1
           cycleResult.errors.push({
-            kind: "bridge_delivery",
+            kind: "notification_delivery",
             filePath,
             turnID: event.turnID,
             message: toErrorMessage(error)
@@ -893,24 +812,24 @@ export const runWatcherCycle = async ({
       const pendingNotification = normalizePendingNotification(state.pendingNotification)
       if (pendingNotification !== null && pendingNotification.dueAtMs <= currentMs) {
         try {
-          const notifyResult = await sendNotification({ payload: pendingNotification.payload, bridgeToken })
+          const notifyResult = await sendNotification({ payload: pendingNotification.payload, notifierCommand })
           if (notifyResult?.ok === true) {
             cycleResult.deliveredNotifications += 1
             state.pendingNotification = null
           } else {
             cycleResult.droppedNotifications += 1
             cycleResult.errors.push({
-              kind: "bridge_delivery",
+              kind: "notification_delivery",
               filePath: pendingNotification.filePath,
               turnID: pendingNotification.turnID,
-              message: toErrorMessage(notifyResult?.error?.reason || "bridge delivery failed")
+              message: toErrorMessage(notifyResult?.error?.reason || "notification delivery failed")
             })
             state.pendingNotification = null
           }
         } catch (error) {
           cycleResult.droppedNotifications += 1
           cycleResult.errors.push({
-            kind: "bridge_delivery",
+            kind: "notification_delivery",
             filePath: pendingNotification.filePath,
             turnID: pendingNotification.turnID,
             message: toErrorMessage(error)
@@ -971,23 +890,11 @@ export const runWatcherLoop = async ({
 }
 
 export const resolveWatcherConfigFromEnv = ({ env = process.env } = {}) => {
-  const bridgeToken = typeof env?.[WATCHER_TOKEN_ENV_KEY] === "string"
-    ? env[WATCHER_TOKEN_ENV_KEY].trim()
-    : ""
-  if (!bridgeToken) {
-    return {
-      ok: false,
-      exitCode: WATCHER_CONFIG_EXIT_CODE,
-      error: `missing required ${WATCHER_TOKEN_ENV_KEY}`
-    }
-  }
-
   const intervalMs = Math.max(1, Math.trunc(sanitizeFiniteNumber(env?.[WATCHER_INTERVAL_ENV_KEY], WATCHER_LOOP_INTERVAL_MS)))
   const debounceMs = Math.max(0, Math.trunc(sanitizeFiniteNumber(env?.[WATCHER_DEBOUNCE_ENV_KEY], WATCHER_DEBOUNCE_DEFAULT_MS)))
   return {
     ok: true,
     config: {
-      bridgeToken,
       intervalMs,
       debounceMs,
       sessionsRootPath: WATCHER_SESSIONS_ROOT,
@@ -1000,19 +907,19 @@ export const resolveWatcherConfigFromEnv = ({ env = process.env } = {}) => {
 const WATCHER_USAGE = [
   "Usage: codex-completion-watcher [--once] [--help]",
   "",
-  "Required environment:",
-  `  ${WATCHER_TOKEN_ENV_KEY}=<bridge-token>`,
-  "",
   "Optional environment:",
   `  ${WATCHER_INTERVAL_ENV_KEY}=1500`,
-  `  ${WATCHER_DEBOUNCE_ENV_KEY}=3000`
+  `  ${WATCHER_DEBOUNCE_ENV_KEY}=3000`,
+  "",
+  `Missing ${NOTIFIER_BINARY_NAME}? Run: ${WATCHER_REPAIR_COMMAND}`
 ].join("\n")
 
 export const runWatcherCli = async ({
   argv = process.argv.slice(2),
   env = process.env,
   log = console.log,
-  errorLog = console.error
+  errorLog = console.error,
+  resolveNotifierCommand = resolveTerminalNotifierCommand
 } = {}) => {
   if (argv.includes("--help") || argv.includes("-h")) {
     log(WATCHER_USAGE)
@@ -1026,13 +933,19 @@ export const runWatcherCli = async ({
     return resolvedConfig.exitCode
   }
 
+  const resolvedNotifier = await resolveNotifierCommand()
+  if (!resolvedNotifier.ok) {
+    errorLog(resolvedNotifier.error)
+    return resolvedNotifier.exitCode
+  }
+
   try {
     const cycleOptions = {
-      bridgeToken: resolvedConfig.config.bridgeToken,
       sessionsRootPath: resolvedConfig.config.sessionsRootPath,
       stateFilePath: resolvedConfig.config.stateFilePath,
       subtitle: resolvedConfig.config.subtitle,
-      debounceMs: resolvedConfig.config.debounceMs
+      debounceMs: resolvedConfig.config.debounceMs,
+      notifierCommand: resolvedNotifier.command
     }
 
     if (runOnce) {

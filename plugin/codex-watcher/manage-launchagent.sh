@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-LABEL="com.codzr.codex-completion-watcher"
+LABEL="com.codzr.codex-task-notifier"
 PLIST_NAME="${LABEL}.plist"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 SOURCE_PLIST="${SCRIPT_DIR}/${PLIST_NAME}"
@@ -9,10 +9,16 @@ TARGET_DIR="${HOME}/Library/LaunchAgents"
 TARGET_PLIST="${TARGET_DIR}/${PLIST_NAME}"
 DOMAIN="gui/$(id -u)"
 SERVICE="${DOMAIN}/${LABEL}"
-PLACEHOLDER_TOKEN="__REPLACE_WITH_LOCAL_OPENCODE_NOTIFY_TOKEN__"
+SYSTEM_FALLBACK_PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+INTERVAL_ENV_KEY="CODEX_NOTIFY_INTERVAL_MS"
+DEBOUNCE_ENV_KEY="CODEX_NOTIFY_DEBOUNCE_MS"
+NODE_BINARY="node"
+BUN_BINARY="bun"
+BUN_FALLBACK="${HOME}/.bun/bin/bun"
+NOTIFIER_BINARY="terminal-notifier"
 
 usage() {
-  cat <<'EOF'
+  cat <<'USAGE'
 Usage: manage-launchagent.sh <install|start|status|stop|uninstall>
 
 Commands:
@@ -21,7 +27,7 @@ Commands:
   status     Print launchctl service status
   stop       Unload service if running
   uninstall  Unload service and remove installed plist
-EOF
+USAGE
 }
 
 ensure_macos() {
@@ -38,6 +44,36 @@ ensure_source_plist() {
   fi
 }
 
+ensure_dependency() {
+  local binary="$1"
+
+  if command -v "${binary}" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  echo "Error: missing ${binary}. Install it first:" >&2
+  echo "brew install terminal-notifier" >&2
+  exit 1
+}
+
+ensure_js_runtime() {
+  if command -v "${NODE_BINARY}" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if command -v "${BUN_BINARY}" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if [[ -x "${BUN_FALLBACK}" ]]; then
+    return 0
+  fi
+
+  echo "Error: missing JavaScript runtime (node or bun)." >&2
+  echo "Install one runtime, for example: brew install node" >&2
+  exit 1
+}
+
 read_plist_env_value() {
   local plist_path="$1"
   local key="$2"
@@ -47,11 +83,6 @@ read_plist_env_value() {
   fi
 
   /usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:${key}" "${plist_path}" 2>/dev/null || true
-}
-
-is_usable_token() {
-  local token="$1"
-  [[ -n "${token}" && "${token}" != "${PLACEHOLDER_TOKEN}" ]]
 }
 
 prepend_path_segment_if_missing() {
@@ -77,42 +108,52 @@ prepend_path_segment_if_missing() {
   esac
 }
 
-resolve_token_for_install() {
-  local existing_token="$1"
-  local template_token="$2"
+resolve_optional_env_value() {
+  local key="$1"
+  local existing_value="$2"
+  local shell_value="${!key:-}"
 
-  if [[ -n "${OPENCODE_NOTIFY_TOKEN:-}" ]]; then
-    printf '%s' "${OPENCODE_NOTIFY_TOKEN}"
+  if [[ -n "${shell_value}" ]]; then
+    printf '%s' "${shell_value}"
     return 0
   fi
 
-  if is_usable_token "${existing_token}"; then
-    printf '%s' "${existing_token}"
-    return 0
-  fi
-
-  printf '%s' "${template_token}"
+  printf '%s' "${existing_value}"
 }
 
 resolve_path_for_install() {
   local existing_path="$1"
+  local shell_path="${PATH:-}"
   local node_bin_dir=""
-  local system_fallback_path="/usr/bin:/bin:/usr/sbin:/sbin"
+  local bun_bin_dir=""
+  local notifier_bin_dir=""
   local resolved_path=""
 
   if command -v node >/dev/null 2>&1; then
     node_bin_dir="$(dirname "$(command -v node)")"
   fi
 
+  if command -v "${BUN_BINARY}" >/dev/null 2>&1; then
+    bun_bin_dir="$(dirname "$(command -v "${BUN_BINARY}")")"
+  elif [[ -x "${BUN_FALLBACK}" ]]; then
+    bun_bin_dir="$(dirname "${BUN_FALLBACK}")"
+  fi
+
+  if command -v "${NOTIFIER_BINARY}" >/dev/null 2>&1; then
+    notifier_bin_dir="$(dirname "$(command -v "${NOTIFIER_BINARY}")")"
+  fi
+
   if [[ -n "${existing_path}" ]]; then
     resolved_path="${existing_path}"
-  elif [[ -n "${node_bin_dir}" ]]; then
-    resolved_path="${node_bin_dir}:${system_fallback_path}"
+  elif [[ -n "${shell_path}" ]]; then
+    resolved_path="${shell_path}"
   else
-    resolved_path="${system_fallback_path}"
+    resolved_path="${SYSTEM_FALLBACK_PATH}"
   fi
 
   resolved_path="$(prepend_path_segment_if_missing "${node_bin_dir}" "${resolved_path}")"
+  resolved_path="$(prepend_path_segment_if_missing "${bun_bin_dir}" "${resolved_path}")"
+  resolved_path="$(prepend_path_segment_if_missing "${notifier_bin_dir}" "${resolved_path}")"
   printf '%s' "${resolved_path}"
 }
 
@@ -140,6 +181,9 @@ status_service() {
 }
 
 start_service() {
+  ensure_js_runtime
+  ensure_dependency "${NOTIFIER_BINARY}"
+
   if [[ ! -f "${TARGET_PLIST}" ]]; then
     echo "Error: installed plist not found: ${TARGET_PLIST}" >&2
     echo "Run: $0 install" >&2
@@ -158,30 +202,41 @@ start_service() {
 
 install_service() {
   ensure_source_plist
+  ensure_js_runtime
+  ensure_dependency "${NOTIFIER_BINARY}"
   mkdir -p "${TARGET_DIR}"
 
   local had_existing_plist="false"
   local backup_plist="${TARGET_PLIST}.bak.$$"
-  local existing_token=""
   local existing_path=""
-  local template_token=""
-  local resolved_token=""
+  local existing_interval=""
+  local existing_debounce=""
   local resolved_path=""
+  local resolved_interval=""
+  local resolved_debounce=""
 
   if [[ -f "${TARGET_PLIST}" ]]; then
     had_existing_plist="true"
-    existing_token="$(read_plist_env_value "${TARGET_PLIST}" "OPENCODE_NOTIFY_TOKEN")"
     existing_path="$(read_plist_env_value "${TARGET_PLIST}" "PATH")"
+    existing_interval="$(read_plist_env_value "${TARGET_PLIST}" "${INTERVAL_ENV_KEY}")"
+    existing_debounce="$(read_plist_env_value "${TARGET_PLIST}" "${DEBOUNCE_ENV_KEY}")"
     cp "${TARGET_PLIST}" "${backup_plist}"
   fi
 
-  template_token="$(read_plist_env_value "${SOURCE_PLIST}" "OPENCODE_NOTIFY_TOKEN")"
-  resolved_token="$(resolve_token_for_install "${existing_token}" "${template_token}")"
   resolved_path="$(resolve_path_for_install "${existing_path}")"
+  resolved_interval="$(resolve_optional_env_value "${INTERVAL_ENV_KEY}" "${existing_interval}")"
+  resolved_debounce="$(resolve_optional_env_value "${DEBOUNCE_ENV_KEY}" "${existing_debounce}")"
 
   cp "${SOURCE_PLIST}" "${TARGET_PLIST}"
-  plutil -replace EnvironmentVariables.OPENCODE_NOTIFY_TOKEN -string "${resolved_token}" "${TARGET_PLIST}"
   plutil -replace EnvironmentVariables.PATH -string "${resolved_path}" "${TARGET_PLIST}"
+
+  if [[ -n "${resolved_interval}" ]]; then
+    plutil -replace "EnvironmentVariables.${INTERVAL_ENV_KEY}" -string "${resolved_interval}" "${TARGET_PLIST}"
+  fi
+
+  if [[ -n "${resolved_debounce}" ]]; then
+    plutil -replace "EnvironmentVariables.${DEBOUNCE_ENV_KEY}" -string "${resolved_debounce}" "${TARGET_PLIST}"
+  fi
 
   if ! {
     launchctl bootout "${SERVICE}" >/dev/null 2>&1 || true

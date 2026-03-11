@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.codzr.codex-completion-watcher</string>
+  <string>com.codzr.codex-task-notifier</string>
 
   <key>ProgramArguments</key>
   <array>
@@ -24,14 +24,14 @@
 
   <key>EnvironmentVariables</key>
   <dict>
-    <key>OPENCODE_NOTIFY_TOKEN</key>
-    <string>__REPLACE_WITH_LOCAL_OPENCODE_NOTIFY_TOKEN__</string>
+    <key>PATH</key>
+    <string>/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
 
   <key>StandardOutPath</key>
-  <string>/Users/codzr/Library/Logs/codex-completion-watcher.log</string>
+  <string>/Users/codzr/Library/Logs/codex-task-notifier.log</string>
 
   <key>StandardErrorPath</key>
-  <string>/Users/codzr/Library/Logs/codex-completion-watcher.error.log</string>
+  <string>/Users/codzr/Library/Logs/codex-task-notifier.error.log</string>
 </dict>
 </plist>

@@ -1,69 +1,93 @@
-# Codex Completion Watcher (LaunchAgent)
+# Codex Task Notifier (LaunchAgent)
 
-Operator runbook for `plugin/codex-watcher/manage-launchagent.sh` and plist `plugin/codex-watcher/com.codzr.codex-completion-watcher.plist`.
+独立的 Codex 任务完成通知器。
+
+它会轮询 `~/.codex/sessions/**/*.jsonl`，捕获 `event_msg.payload.type=task_complete`，然后通过 `terminal-notifier` 发送 macOS 原生通知。运行时优先使用 `node`，缺失时自动回退到 `bun`。
 
 ## Paths and Label
 
 ```bash
 WATCHER_DIR="/Users/codzr/.config/opencode/plugin/codex-watcher"
 MANAGER="$WATCHER_DIR/manage-launchagent.sh"
-TEMPLATE_PLIST="$WATCHER_DIR/com.codzr.codex-completion-watcher.plist"
-INSTALLED_PLIST="$HOME/Library/LaunchAgents/com.codzr.codex-completion-watcher.plist"
-LABEL="com.codzr.codex-completion-watcher"
+TEMPLATE_PLIST="$WATCHER_DIR/com.codzr.codex-task-notifier.plist"
+INSTALLED_PLIST="$HOME/Library/LaunchAgents/com.codzr.codex-task-notifier.plist"
+LABEL="com.codzr.codex-task-notifier"
 SERVICE="gui/$(id -u)/$LABEL"
 ```
 
 ## Install / Start / Status / Stop / Uninstall
 
 ```bash
+# 1) 安装通知依赖
+brew install terminal-notifier
+
+# 2) 安装并加载 LaunchAgent
 "$MANAGER" install
-"$MANAGER" start
+
+# 3) 查看服务状态
 "$MANAGER" status
+
+# 4) 停止服务
 "$MANAGER" stop
+
+# 5) 卸载服务
 "$MANAGER" uninstall
 ```
 
-## Install Env Behavior (Automatic)
+## Runtime Behavior
 
-`install` preserves or sets usable env values in the installed plist:
-- `EnvironmentVariables.OPENCODE_NOTIFY_TOKEN` priority: shell `OPENCODE_NOTIFY_TOKEN` -> existing installed plist token (if non-placeholder) -> template token.
-- `EnvironmentVariables.PATH` priority: existing installed plist PATH when present; otherwise `$(dirname "$(command -v node)"):/usr/bin:/bin:/usr/sbin:/sbin` (or system fallback if `node` is unavailable). Node bin is prepended when available.
-- `EnvironmentVariables.CODEX_WATCHER_DEBOUNCE_MS` controls trailing debounce for completion notifications. Default is `3000` (ms), and `0` disables debounce (every completion notifies immediately).
+- 监听源：`~/.codex/sessions/**/*.jsonl`
+- 完成判定：`event_msg.payload.type = task_complete`
+- 通知标题：`Codex`
+- 通知副标题：`Codex 任务完成 · <cwd basename>`
+- 去重策略：固定 `-group codex-task-complete`，一次只保留一条通知
+- 任务文案：优先使用同一 turn 关联的 `user_message`；缺失时回退到 `last_agent_message`
+- 默认轮询间隔：`1500ms`
+- 默认 trailing debounce：`3000ms`
 
-Notification enrichment behavior:
-- Completion `message` prefers the last `event_msg.payload.type=user_message` text associated to the same `task_started.turn_id`; if unavailable, it falls back to `task_complete.last_agent_message` normalization.
-- Completion `subtitle` appends cwd basename when stream context provides `turn_context.payload.cwd` or `session_meta.payload.cwd` (for example: `Codex 任务完成 · combination-flooding`).
-- When a `task_complete` event arrives without same-batch cwd context, watcher performs a lightweight session-file-head lookup for `session_meta.payload.cwd` and caches it in checkpoint state to keep repository hints stable across cycles.
+## Optional Environment Variables
 
-Optional post-install inspection:
+安装时，`manage-launchagent.sh` 会保留已安装 plist 中已有的值，或者使用当前 shell 环境变量：
 
 ```bash
-plutil -p "$INSTALLED_PLIST"
+CODEX_NOTIFY_INTERVAL_MS=1500
+CODEX_NOTIFY_DEBOUNCE_MS=3000
 ```
 
-## Launchctl State Check
+示例：
 
 ```bash
-launchctl print "$SERVICE"
+CODEX_NOTIFY_DEBOUNCE_MS=0 "$MANAGER" install
 ```
 
-Expected service state semantics:
-- `state = running`: watcher process is active.
-- `state = waiting`: service is loaded and waiting between restarts/events.
+## Make Notifications Stay Until You Close Them
 
-## Bridge Health and Runtime Proof
+代码侧只负责发送通知和同组替换；是否 `Banner` 还是 `Alert` 由 macOS 系统设置决定。
 
-Health check (auth header is required):
+首次安装后，手动打开：
 
-```bash
-BASE="http://127.0.0.1:17342"
-curl -sS "$BASE/opencode/health" -H "x-opencode-token: $TOKEN"
+```text
+System Settings > Notifications > terminal-notifier
 ```
 
-Synthetic event append + debug-state verification:
+建议设置：
+- Allow Notifications: 开启
+- Notification Style: `Alerts`
+
+这样通知会常驻，直到你手动关闭；同时由于固定 `group`，新任务完成只会替换当前那一条。
+
+## Smoke Test
+
+一次性执行 watcher：
 
 ```bash
-TURN_ID="qa-codex-watcher-$(date +%s)"
+node /Users/codzr/.config/opencode/plugin/codex-watcher/codex-completion-watcher.mjs --once
+```
+
+向最新会话文件追加一条测试完成事件：
+
+```bash
+TURN_ID="qa-codex-task-$(date +%s)"
 SESSION_FILE="$(python3 - <<'PY'
 import glob, os
 files = sorted(glob.glob(os.path.expanduser('~/.codex/sessions/**/*.jsonl'), recursive=True), key=os.path.getmtime)
@@ -72,42 +96,18 @@ PY
 )"
 
 printf '%s\n' "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"$TURN_ID\",\"last_agent_message\":\"watcher smoke\"}}" >> "$SESSION_FILE"
-
-curl -sS "$BASE/opencode/debug/state" -H "x-opencode-token: $TOKEN" \
-  | jq -e --arg id "$TURN_ID" '.ok == true and ([.active[].id] | index($id) != null)'
+node /Users/codzr/.config/opencode/plugin/codex-watcher/codex-completion-watcher.mjs --once
 ```
+
+连续追加两条时，通知应保持只有一条，并显示最后一次完成内容。
 
 ## Troubleshooting
 
 | Symptom | Check | Expected / Fix |
 |---|---|---|
-| `UNAUTHORIZED` from bridge endpoints or watcher delivery | `curl -sS -o /tmp/opencode-auth.json -w '%{http_code}\n' "$BASE/opencode/health" -H "x-opencode-token: $TOKEN"` | Expect `200`. If `401`, set correct shared token in both bridge and `EnvironmentVariables.OPENCODE_NOTIFY_TOKEN`, then restart watcher. |
-| `ECONNREFUSED` when posting to bridge | `curl -sS "$BASE/opencode/health" -H "x-opencode-token: $TOKEN"` | Bridge is not listening. Start/restart bridge runtime, then rerun watcher `start` and confirm `launchctl print "$SERVICE"` shows `running` or `waiting`. |
-| Missing or placeholder token in installed plist | `plutil -p "$INSTALLED_PLIST"` | If token is empty or `__REPLACE_WITH_LOCAL_OPENCODE_NOTIFY_TOKEN__`, patch `EnvironmentVariables.OPENCODE_NOTIFY_TOKEN` in installed plist and restart service. |
-
-Manual env patch (troubleshooting only):
-
-```bash
-TOKEN="replace-with-real-shared-token"
-NODE_BIN_DIR="$(dirname "$(command -v node)")"
-
-plutil -replace EnvironmentVariables.OPENCODE_NOTIFY_TOKEN -string "$TOKEN" "$INSTALLED_PLIST"
-plutil -replace EnvironmentVariables.PATH -string "$NODE_BIN_DIR:/usr/bin:/bin:/usr/sbin:/sbin" "$INSTALLED_PLIST"
-
-"$MANAGER" stop || true
-"$MANAGER" start
-"$MANAGER" status
-```
-
-## Rollback Drill (Deterministic)
-
-```bash
-"$MANAGER" uninstall
-launchctl print "$SERVICE"
-```
-
-Expected after uninstall:
-- `"$MANAGER" uninstall` prints `Uninstalled com.codzr.codex-completion-watcher.`
-- `launchctl print "$SERVICE"` returns not-found output, e.g.:
-  - `Bad request.`
-  - `Could not find service "com.codzr.codex-completion-watcher" in domain for user gui: <uid>`
+| `missing required terminal-notifier` | `command -v terminal-notifier` | 若为空，执行 `brew install terminal-notifier` |
+| LaunchAgent 报 runtime 缺失 | `command -v node || command -v bun` | 至少安装一个；例如执行 `brew install node`，或确认现有 `bun` 在 PATH 中 |
+| LaunchAgent 无法启动 | `launchctl print "$SERVICE"` | 确认服务存在；若不存在，重新执行 `"$MANAGER" install` |
+| watcher 已启动但无通知 | `plutil -p "$INSTALLED_PLIST"` | 确认 `EnvironmentVariables.PATH` 包含 `terminal-notifier` 与 `node` 所在目录 |
+| 通知会自动消失 | `System Settings > Notifications > terminal-notifier` | 将样式改为 `Alerts` |
+| 调试去抖效果 | `plutil -p "$INSTALLED_PLIST"` | 确认 `CODEX_NOTIFY_DEBOUNCE_MS` 是否符合预期 |
