@@ -16,28 +16,27 @@ import {
   NOTIFICATION_PAYLOAD_ID_KEY,
   NOTIFICATION_PAYLOAD_MESSAGE_KEY,
   NOTIFICATION_PAYLOAD_SUBTITLE_KEY,
-  NOTIFIER_BINARY_NAME,
-  NOTIFIER_GROUP,
-  NOTIFIER_SOUND,
   NOTIFIER_TITLE,
+  STICKY_DIALOG_CLOSE_LABEL,
+  STICKY_DIALOG_PID_FILE,
+  STICKY_DIALOG_SCRIPT_PATH,
   TASK_COMPLETE_MESSAGE_FALLBACK,
   TASK_COMPLETE_MESSAGE_MAX_LENGTH,
   WATCHER_DEBOUNCE_DEFAULT_MS,
   WATCHER_DEBOUNCE_ENV_KEY,
+  WATCHER_FIRST_SEEN_LOOKBACK_MS,
   WATCHER_INTERVAL_ENV_KEY,
-  WATCHER_REPAIR_COMMAND,
   WATCHER_SUBTITLE,
   buildTaskCompleteNotificationPayload,
   createCheckpointState,
-  getTerminalNotifierArguments,
+  getStickyDialogCommand,
   listSessionJsonlFiles,
   parseTaskCompleteEvent,
-  resolveTerminalNotifierCommand,
   resolveWatcherConfigFromEnv,
   runWatcherCli,
   runWatcherCycle,
   runWatcherLoop,
-  sendTerminalNotification,
+  sendStickyDialogNotification,
   tailFileTaskCompleteEvents,
   writeCheckpointStateAtomic
 } from "./codex-completion-watcher.mjs"
@@ -136,15 +135,15 @@ test("manager script: targets new service label and new env keys", async () => {
   assert.match(scriptText, /PLIST_NAME="\$\{LABEL\}\.plist"/)
   assert.match(scriptText, /CODEX_NOTIFY_INTERVAL_MS/)
   assert.match(scriptText, /CODEX_NOTIFY_DEBOUNCE_MS/)
-  assert.match(scriptText, /terminal-notifier/)
+  assert.doesNotMatch(scriptText, /terminal-notifier/)
   assert.doesNotMatch(scriptText, /OPENCODE_NOTIFY_TOKEN/)
 })
 
-test("constants: notifier defaults and checkpoint version remain stable", () => {
-  assert.equal(NOTIFIER_BINARY_NAME, "terminal-notifier")
-  assert.equal(NOTIFIER_GROUP, "codex-task-complete")
+test("constants: sticky dialog defaults and checkpoint version remain stable", () => {
   assert.equal(NOTIFIER_TITLE, "Codex")
-  assert.equal(NOTIFIER_SOUND, "default")
+  assert.equal(STICKY_DIALOG_CLOSE_LABEL, "关闭")
+  assert.equal(STICKY_DIALOG_PID_FILE.endsWith("dialog.pid"), true)
+  assert.equal(STICKY_DIALOG_SCRIPT_PATH.endsWith("show-codex-dialog.applescript"), true)
   assert.equal(CHECKPOINT_STATE_VERSION, 1)
   assert.deepEqual(createCheckpointState(), {
     version: 1,
@@ -225,65 +224,92 @@ test("config: resolveWatcherConfigFromEnv resolves defaults and overrides withou
   assert.equal(clampedConfig.config.debounceMs, 0)
 })
 
-test("config error: resolveTerminalNotifierCommand reports brew install fix", async () => {
-  const result = await resolveTerminalNotifierCommand({
-    execFileImpl: async () => {
-      throw new Error("missing")
-    }
-  })
-
-  assert.equal(result.ok, false)
-  assert.equal(result.exitCode, 2)
-  assert.equal(result.error, `missing required ${NOTIFIER_BINARY_NAME}. Install it with: ${WATCHER_REPAIR_COMMAND}`)
-})
-
-test("notifier args: sendTerminalNotification uses fixed group and system title", async () => {
-  const calls = []
+test("dialog command: builds osascript invocation with close button", () => {
   const payload = {
     [NOTIFICATION_PAYLOAD_ID_KEY]: "turn_notify",
     [NOTIFICATION_PAYLOAD_MESSAGE_KEY]: "Ship it",
     [NOTIFICATION_PAYLOAD_SUBTITLE_KEY]: "Codex 任务完成 · demo"
   }
 
-  const result = await sendTerminalNotification({
-    payload,
-    notifierCommand: "/opt/homebrew/bin/terminal-notifier",
-    execFileImpl: async (file, args) => {
-      calls.push({ file, args })
-      return { stdout: "", stderr: "" }
-    }
-  })
+  const command = getStickyDialogCommand({ payload, scriptPath: "/tmp/show-codex-dialog.applescript" })
 
-  assert.equal(result.ok, true)
-  assert.equal(calls.length, 1)
-  assert.equal(calls[0].file, "/opt/homebrew/bin/terminal-notifier")
-  assert.deepEqual(calls[0].args, getTerminalNotifierArguments({ payload }))
-  assert.deepEqual(calls[0].args, [
-    "-title", "Codex",
-    "-subtitle", "Codex 任务完成 · demo",
-    "-message", "Ship it",
-    "-group", "codex-task-complete",
-    "-sound", "default"
+  assert.equal(command.file, "/usr/bin/osascript")
+  assert.deepEqual(command.args, [
+    "/tmp/show-codex-dialog.applescript",
+    "Codex",
+    "Codex 任务完成 · demo",
+    "Ship it",
+    "关闭"
   ])
 })
 
-test("notifier missing binary: sendTerminalNotification returns clear reason", async () => {
-  const error = new Error("spawn ENOENT")
-  error.code = "ENOENT"
+test("dialog delivery: sendStickyDialogNotification replaces active dialog and writes latest pid", async () => {
+  await withTempDir(async (tempDir) => {
+    const pidFilePath = path.join(tempDir, "dialog.pid")
+    await fs.writeFile(pidFilePath, "111\n", "utf8")
 
-  const result = await sendTerminalNotification({
+    const payload = {
+      [NOTIFICATION_PAYLOAD_ID_KEY]: "turn_notify",
+      [NOTIFICATION_PAYLOAD_MESSAGE_KEY]: "Ship it",
+      [NOTIFICATION_PAYLOAD_SUBTITLE_KEY]: "Codex 任务完成 · demo"
+    }
+    const killCalls = []
+    const execCalls = []
+    const spawnCalls = []
+
+    const result = await sendStickyDialogNotification({
+      payload,
+      pidFilePath,
+      scriptPath: "/tmp/show-codex-dialog.applescript",
+      fsPromises: fs,
+      execFileImpl: async (file, args) => {
+        execCalls.push({ file, args })
+        return { stdout: "/usr/bin/osascript /tmp/show-codex-dialog.applescript Codex\n", stderr: "" }
+      },
+      killImpl: (pid, signal) => {
+        killCalls.push({ pid, signal })
+      },
+      spawnImpl: (file, args, options) => {
+        spawnCalls.push({ file, args, options })
+        return {
+          pid: 222,
+          unref() {}
+        }
+      }
+    })
+
+    assert.equal(result.ok, true)
+    assert.deepEqual(execCalls, [{
+      file: "/bin/ps",
+      args: ["-p", "111", "-o", "command="]
+    }])
+    assert.deepEqual(killCalls, [{ pid: 111, signal: "SIGTERM" }])
+    assert.equal(spawnCalls.length, 1)
+    assert.equal(spawnCalls[0].file, "/usr/bin/osascript")
+    assert.deepEqual(spawnCalls[0].args, getStickyDialogCommand({
+      payload,
+      scriptPath: "/tmp/show-codex-dialog.applescript"
+    }).args)
+    assert.equal(spawnCalls[0].options.detached, true)
+    assert.equal(await fs.readFile(pidFilePath, "utf8"), "222\n")
+  })
+})
+
+test("dialog delivery: sendStickyDialogNotification returns clear reason on spawn failure", async () => {
+  const result = await sendStickyDialogNotification({
     payload: {
       id: "turn_missing",
       message: "Done",
       subtitle: WATCHER_SUBTITLE
     },
-    execFileImpl: async () => {
-      throw error
+    execFileImpl: async () => ({ stdout: "", stderr: "" }),
+    spawnImpl: () => {
+      throw new Error("spawn failed")
     }
   })
 
   assert.equal(result.ok, false)
-  assert.equal(result.error.reason, `missing required ${NOTIFIER_BINARY_NAME}. Install it with: ${WATCHER_REPAIR_COMMAND}`)
+  assert.equal(result.error.reason, "spawn failed")
 })
 
 test("tailing: extracts task summary and cwd enrichment from same batch", async () => {
@@ -420,6 +446,78 @@ test("debounce: stores only latest completion and delivers it once due", async (
   })
 })
 
+test("first seen recent file: recovers latest completion after watcher startup", async () => {
+  await withTempDir(async (tempDir) => {
+    const sessionsRootPath = path.join(tempDir, "sessions")
+    const sessionDir = path.join(sessionsRootPath, "2026", "03", "11")
+    await fs.mkdir(sessionDir, { recursive: true })
+
+    const sessionFile = path.join(sessionDir, "recent.jsonl")
+    await fs.writeFile(sessionFile, [
+      makeSessionMetaLine("/workspace/demo-root"),
+      makeTaskStartedLine("turn_recent"),
+      makeUserMessageLine("recover first completion after reboot"),
+      makeTurnContextLine({ turnID: "turn_recent", cwd: "/workspace/demo-root" }),
+      makeTaskCompleteLine("turn_recent", "fallback")
+    ].join("\n") + "\n", "utf8")
+
+    const stateFilePath = path.join(tempDir, "state.json")
+    const notifications = []
+    const startupMs = Date.now()
+
+    const cycleResult = await runWatcherCycleNoDebounce({
+      sessionsRootPath,
+      stateFilePath,
+      startupMs,
+      sendNotification: async ({ payload }) => {
+        notifications.push(payload)
+        return { ok: true }
+      }
+    })
+
+    assert.equal(cycleResult.emittedEvents, 1)
+    assert.equal(cycleResult.deliveredNotifications, 1)
+    assert.deepEqual(notifications, [{
+      id: "turn_recent",
+      message: "recover first completion after reboot",
+      subtitle: "Codex 任务完成 · demo-root"
+    }])
+  })
+})
+
+test("first seen stale file: still skips historical backfill on startup", async () => {
+  await withTempDir(async (tempDir) => {
+    const sessionsRootPath = path.join(tempDir, "sessions")
+    const sessionDir = path.join(sessionsRootPath, "2026", "03", "11")
+    await fs.mkdir(sessionDir, { recursive: true })
+
+    const sessionFile = path.join(sessionDir, "stale.jsonl")
+    await fs.writeFile(sessionFile, [
+      makeSessionMetaLine("/workspace/legacy"),
+      makeTaskCompleteLine("turn_stale", "historical notification")
+    ].join("\n") + "\n", "utf8")
+
+    const staleTimestampSeconds = Math.floor((Date.now() - WATCHER_FIRST_SEEN_LOOKBACK_MS - 5000) / 1000)
+    await fs.utimes(sessionFile, staleTimestampSeconds, staleTimestampSeconds)
+
+    const stateFilePath = path.join(tempDir, "state.json")
+    const cycleResult = await runWatcherCycleNoDebounce({
+      sessionsRootPath,
+      stateFilePath,
+      startupMs: Date.now(),
+      sendNotification: async () => ({ ok: true })
+    })
+
+    assert.equal(cycleResult.emittedEvents, 0)
+
+    const rawState = JSON.parse(await fs.readFile(stateFilePath, "utf8"))
+    const sessionStat = await fs.stat(sessionFile)
+    const checkpoint = rawState.files[sessionFile]
+    assert.equal(typeof checkpoint.offset, "number")
+    assert.equal(checkpoint.offset, sessionStat.size)
+  })
+})
+
 test("checkpoint write: persists state atomically", async () => {
   await withTempDir(async (tempDir) => {
     const stateFilePath = path.join(tempDir, "state", "state.json")
@@ -553,20 +651,17 @@ test("delivery failure: cycle records notification_delivery errors", async () =>
   })
 })
 
-test("cli: returns config error when terminal-notifier is unavailable", async () => {
-  const messages = []
+test("cli: runs once without external notifier lookup", async () => {
+  const cycleCalls = []
   const exitCode = await runWatcherCli({
     argv: ["--once"],
-    errorLog: (message) => {
-      messages.push(message)
-    },
-    resolveNotifierCommand: async () => ({
-      ok: false,
-      exitCode: 2,
-      error: `missing required ${NOTIFIER_BINARY_NAME}. Install it with: ${WATCHER_REPAIR_COMMAND}`
-    })
+    runCycle: async (cycleOptions) => {
+      cycleCalls.push(cycleOptions)
+    }
   })
 
-  assert.equal(exitCode, 2)
-  assert.deepEqual(messages, [`missing required ${NOTIFIER_BINARY_NAME}. Install it with: ${WATCHER_REPAIR_COMMAND}`])
+  assert.equal(exitCode, 0)
+  assert.equal(cycleCalls.length, 1)
+  assert.equal(typeof cycleCalls[0].startupMs, "number")
+  assert.equal(cycleCalls[0].subtitle, WATCHER_SUBTITLE)
 })

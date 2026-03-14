@@ -15,7 +15,6 @@ DEBOUNCE_ENV_KEY="CODEX_NOTIFY_DEBOUNCE_MS"
 NODE_BINARY="node"
 BUN_BINARY="bun"
 BUN_FALLBACK="${HOME}/.bun/bin/bun"
-NOTIFIER_BINARY="terminal-notifier"
 
 usage() {
   cat <<'USAGE'
@@ -42,18 +41,6 @@ ensure_source_plist() {
     echo "Error: source plist not found: ${SOURCE_PLIST}" >&2
     exit 1
   fi
-}
-
-ensure_dependency() {
-  local binary="$1"
-
-  if command -v "${binary}" >/dev/null 2>&1; then
-    return 0
-  fi
-
-  echo "Error: missing ${binary}. Install it first:" >&2
-  echo "brew install terminal-notifier" >&2
-  exit 1
 }
 
 ensure_js_runtime() {
@@ -126,7 +113,6 @@ resolve_path_for_install() {
   local shell_path="${PATH:-}"
   local node_bin_dir=""
   local bun_bin_dir=""
-  local notifier_bin_dir=""
   local resolved_path=""
 
   if command -v node >/dev/null 2>&1; then
@@ -139,10 +125,6 @@ resolve_path_for_install() {
     bun_bin_dir="$(dirname "${BUN_FALLBACK}")"
   fi
 
-  if command -v "${NOTIFIER_BINARY}" >/dev/null 2>&1; then
-    notifier_bin_dir="$(dirname "$(command -v "${NOTIFIER_BINARY}")")"
-  fi
-
   if [[ -n "${existing_path}" ]]; then
     resolved_path="${existing_path}"
   elif [[ -n "${shell_path}" ]]; then
@@ -153,7 +135,6 @@ resolve_path_for_install() {
 
   resolved_path="$(prepend_path_segment_if_missing "${node_bin_dir}" "${resolved_path}")"
   resolved_path="$(prepend_path_segment_if_missing "${bun_bin_dir}" "${resolved_path}")"
-  resolved_path="$(prepend_path_segment_if_missing "${notifier_bin_dir}" "${resolved_path}")"
   printf '%s' "${resolved_path}"
 }
 
@@ -182,7 +163,6 @@ status_service() {
 
 start_service() {
   ensure_js_runtime
-  ensure_dependency "${NOTIFIER_BINARY}"
 
   if [[ ! -f "${TARGET_PLIST}" ]]; then
     echo "Error: installed plist not found: ${TARGET_PLIST}" >&2
@@ -203,7 +183,6 @@ start_service() {
 install_service() {
   ensure_source_plist
   ensure_js_runtime
-  ensure_dependency "${NOTIFIER_BINARY}"
   mkdir -p "${TARGET_DIR}"
 
   local had_existing_plist="false"

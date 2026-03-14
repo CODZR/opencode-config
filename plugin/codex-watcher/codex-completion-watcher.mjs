@@ -1,9 +1,12 @@
 import os from "node:os"
 import path from "node:path"
 import { promises as fs } from "node:fs"
-import { execFile as execFileCallback } from "node:child_process"
+import { execFile as execFileCallback, spawn as spawnCallback } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { promisify } from "node:util"
+
+const CURRENT_FILE_PATH = fileURLToPath(import.meta.url)
+const CURRENT_DIR_PATH = path.dirname(CURRENT_FILE_PATH)
 
 export const CODEX_EVENT_ENVELOPE_TYPE = "event_msg"
 export const CODEX_EVENT_PAYLOAD_KEY = "payload"
@@ -25,6 +28,9 @@ export const TASK_COMPLETE_MESSAGE_MAX_LENGTH = 200
 const TASK_COMPLETE_MESSAGE_TRUNCATION_SUFFIX = "..."
 export const WATCHER_STATE_DIR = path.join(os.homedir(), ".local", "state", "codex-notify-watcher")
 export const WATCHER_STATE_FILE = path.join(WATCHER_STATE_DIR, "state.json")
+export const STICKY_DIALOG_PID_FILE = path.join(WATCHER_STATE_DIR, "dialog.pid")
+export const STICKY_DIALOG_SCRIPT_PATH = path.join(CURRENT_DIR_PATH, "show-codex-dialog.applescript")
+export const STICKY_DIALOG_CLOSE_LABEL = "关闭"
 export const CHECKPOINT_STATE_VERSION = 1
 export const TURN_ID_WINDOW_LIMIT = 128
 export const WATCHER_SESSIONS_ROOT = path.join(os.homedir(), ".codex", "sessions")
@@ -32,6 +38,8 @@ export const WATCHER_LOOP_INTERVAL_MS = 1500
 export const WATCHER_INTERVAL_ENV_KEY = "CODEX_NOTIFY_INTERVAL_MS"
 export const WATCHER_DEBOUNCE_ENV_KEY = "CODEX_NOTIFY_DEBOUNCE_MS"
 export const WATCHER_DEBOUNCE_DEFAULT_MS = 3000
+export const WATCHER_FIRST_SEEN_LOOKBACK_MS = 60000
+export const WATCHER_FIRST_SEEN_TAIL_BYTES = 131072
 export const WATCHER_SUBTITLE = "Codex 任务完成"
 export const WATCHER_REPAIR_COMMAND = "brew install terminal-notifier"
 const WATCHER_SUBTITLE_SEPARATOR = " · "
@@ -52,8 +60,136 @@ const buildNotificationPayload = (payload) => ({
 })
 
 const buildNotificationError = (reason) => ({
-  reason: String(reason ?? "terminal-notifier failed")
+  reason: String(reason ?? "notification delivery failed")
 })
+
+const parsePositiveInteger = (value) => {
+  const normalized = Math.trunc(sanitizeFiniteNumber(value, NaN))
+  return Number.isInteger(normalized) && normalized > 0 ? normalized : null
+}
+
+const readStickyDialogPID = async ({
+  pidFilePath = STICKY_DIALOG_PID_FILE,
+  fsPromises = fs
+} = {}) => {
+  try {
+    const rawValue = await fsPromises.readFile(pidFilePath, "utf8")
+    return parsePositiveInteger(String(rawValue ?? "").trim())
+  } catch (error) {
+    if (error?.code === "ENOENT") return null
+    throw error
+  }
+}
+
+const isStickyDialogProcess = async ({
+  pid,
+  scriptPath = STICKY_DIALOG_SCRIPT_PATH,
+  execFileImpl = execFile
+} = {}) => {
+  const normalizedPID = parsePositiveInteger(pid)
+  if (normalizedPID === null) return false
+
+  try {
+    const result = await execFileImpl("/bin/ps", ["-p", String(normalizedPID), "-o", "command="])
+    const command = typeof result?.stdout === "string" ? result.stdout.trim() : ""
+    return command.includes("/usr/bin/osascript") && command.includes(String(scriptPath))
+  } catch {
+    return false
+  }
+}
+
+export const getStickyDialogCommand = ({
+  payload,
+  scriptPath = STICKY_DIALOG_SCRIPT_PATH,
+  title = NOTIFIER_TITLE,
+  closeLabel = STICKY_DIALOG_CLOSE_LABEL
+} = {}) => {
+  const normalizedPayload = buildNotificationPayload(payload)
+  return {
+    file: "/usr/bin/osascript",
+    args: [
+      String(scriptPath),
+      String(title),
+      normalizedPayload[NOTIFICATION_PAYLOAD_SUBTITLE_KEY],
+      normalizedPayload[NOTIFICATION_PAYLOAD_MESSAGE_KEY],
+      String(closeLabel)
+    ],
+    payload: normalizedPayload
+  }
+}
+
+export const sendStickyDialogNotification = async ({
+  payload,
+  pidFilePath = STICKY_DIALOG_PID_FILE,
+  scriptPath = STICKY_DIALOG_SCRIPT_PATH,
+  closeLabel = STICKY_DIALOG_CLOSE_LABEL,
+  fsPromises = fs,
+  execFileImpl = execFile,
+  spawnImpl = spawnCallback,
+  killImpl = process.kill.bind(process)
+} = {}) => {
+  const normalizedPayload = buildNotificationPayload(payload)
+
+  try {
+    const activePID = await readStickyDialogPID({ pidFilePath, fsPromises })
+    if (activePID !== null) {
+      const isManagedProcess = await isStickyDialogProcess({
+        pid: activePID,
+        scriptPath,
+        execFileImpl
+      })
+
+      if (isManagedProcess) {
+        try {
+          killImpl(activePID, "SIGTERM")
+        } catch (error) {
+          if (error?.code !== "ESRCH") throw error
+        }
+      }
+    }
+
+    await fsPromises.mkdir(path.dirname(pidFilePath), { recursive: true })
+    const command = getStickyDialogCommand({
+      payload: normalizedPayload,
+      scriptPath,
+      title: NOTIFIER_TITLE,
+      closeLabel
+    })
+    const child = spawnImpl(command.file, command.args, {
+      detached: true,
+      stdio: "ignore"
+    })
+
+    if (typeof child?.unref === "function") child.unref()
+
+    const childPID = parsePositiveInteger(child?.pid)
+    if (childPID === null) {
+      throw new Error("sticky dialog spawn returned invalid pid")
+    }
+
+    await fsPromises.writeFile(pidFilePath, `${childPID}
+`, "utf8")
+    return {
+      ok: true,
+      command: command.file,
+      args: command.args,
+      payload: normalizedPayload,
+      pid: childPID
+    }
+  } catch (error) {
+    const stderr = typeof error?.stderr === "string" ? error.stderr.trim() : ""
+    const stdout = typeof error?.stdout === "string" ? error.stdout.trim() : ""
+    return {
+      ok: false,
+      error: buildNotificationError(stderr || stdout || error?.message || "sticky dialog failed")
+    }
+  }
+}
+
+const resolveNotificationGroup = ({ group = NOTIFIER_GROUP } = {}) => {
+  const normalizedGroup = String(group ?? "").trim()
+  return normalizedGroup || NOTIFIER_GROUP
+}
 
 export const getTerminalNotifierArguments = ({
   payload,
@@ -62,11 +198,12 @@ export const getTerminalNotifierArguments = ({
   sound = NOTIFIER_SOUND
 } = {}) => {
   const normalizedPayload = buildNotificationPayload(payload)
+  const notificationGroup = resolveNotificationGroup({ group })
   return [
     "-title", String(title),
     "-subtitle", normalizedPayload[NOTIFICATION_PAYLOAD_SUBTITLE_KEY],
     "-message", normalizedPayload[NOTIFICATION_PAYLOAD_MESSAGE_KEY],
-    "-group", String(group),
+    "-group", notificationGroup,
     "-sound", String(sound)
   ]
 }
@@ -333,22 +470,63 @@ const calculateTailOffset = ({ filePath, stat, checkpoint }) => {
   }
 }
 
+const calculateFirstSeenStartOffset = ({
+  stat,
+  startupMs,
+  firstSeenLookbackMs = WATCHER_FIRST_SEEN_LOOKBACK_MS,
+  firstSeenTailBytes = WATCHER_FIRST_SEEN_TAIL_BYTES
+}) => {
+  const fileSize = Math.max(0, Math.trunc(sanitizeFiniteNumber(stat?.size, 0)))
+  const fileMtimeMs = Math.max(0, sanitizeFiniteNumber(stat?.mtimeMs, 0))
+  const normalizedStartupMs = Math.max(0, sanitizeFiniteNumber(startupMs, 0))
+  const normalizedLookbackMs = Math.max(0, sanitizeFiniteNumber(firstSeenLookbackMs, WATCHER_FIRST_SEEN_LOOKBACK_MS))
+  const normalizedTailBytes = Math.max(1, Math.trunc(sanitizeFiniteNumber(firstSeenTailBytes, WATCHER_FIRST_SEEN_TAIL_BYTES)))
+  const recoveryThresholdMs = Math.max(0, normalizedStartupMs - normalizedLookbackMs)
+
+  if (fileMtimeMs < recoveryThresholdMs) return fileSize
+  return Math.max(0, fileSize - normalizedTailBytes)
+}
+
 export const readJsonlTailFromCheckpoint = async ({
   filePath,
   checkpoint,
-  fsPromises = fs
+  fsPromises = fs,
+  startupMs = 0,
+  firstSeenLookbackMs = WATCHER_FIRST_SEEN_LOOKBACK_MS,
+  firstSeenTailBytes = WATCHER_FIRST_SEEN_TAIL_BYTES
 } = {}) => {
   try {
     const fileHandle = await fsPromises.open(filePath, "r")
     try {
       const stat = await fileHandle.stat()
 
-      // First-seen files should start at EOF to avoid historical backfill.
       if (checkpoint === null || checkpoint === undefined) {
+        const startOffset = calculateFirstSeenStartOffset({
+          stat,
+          startupMs,
+          firstSeenLookbackMs,
+          firstSeenTailBytes
+        })
+        const unreadBytes = Math.max(0, stat.size - startOffset)
+
+        if (unreadBytes === 0) {
+          return {
+            lines: [],
+            didResetCheckpoint: false,
+            checkpoint: buildFileCheckpoint(filePath, stat, startOffset)
+          }
+        }
+
+        const unreadBuffer = Buffer.allocUnsafe(unreadBytes)
+        const { bytesRead } = await fileHandle.read(unreadBuffer, 0, unreadBytes, startOffset)
+        const payloadBuffer = bytesRead === unreadBytes ? unreadBuffer : unreadBuffer.subarray(0, bytesRead)
+        const { lines, consumedBytes } = splitCompleteJsonlLines(payloadBuffer)
+        const nextOffset = startOffset + consumedBytes
+
         return {
-          lines: [],
+          lines,
           didResetCheckpoint: false,
-          checkpoint: buildFileCheckpoint(filePath, stat, stat.size)
+          checkpoint: buildFileCheckpoint(filePath, stat, nextOffset)
         }
       }
 
@@ -586,11 +764,21 @@ export const tailFileTaskCompleteEvents = async ({
   filePath,
   state,
   fsPromises = fs,
-  turnIDWindowSize = TURN_ID_WINDOW_LIMIT
+  turnIDWindowSize = TURN_ID_WINDOW_LIMIT,
+  startupMs = 0,
+  firstSeenLookbackMs = WATCHER_FIRST_SEEN_LOOKBACK_MS,
+  firstSeenTailBytes = WATCHER_FIRST_SEEN_TAIL_BYTES
 }) => {
   const normalizedState = normalizeCheckpointState(state)
   const fileCheckpoint = normalizedState.files[filePath]
-  const tailResult = await readJsonlTailFromCheckpoint({ filePath, checkpoint: fileCheckpoint, fsPromises })
+  const tailResult = await readJsonlTailFromCheckpoint({
+    filePath,
+    checkpoint: fileCheckpoint,
+    fsPromises,
+    startupMs,
+    firstSeenLookbackMs,
+    firstSeenTailBytes
+  })
 
   if (tailResult.didResetCheckpoint === true) {
     delete normalizedState.fileSessionCwds[filePath]
@@ -662,10 +850,13 @@ export const runWatcherCycle = async ({
   listFiles = listSessionJsonlFiles,
   tailFileEvents = tailFileTaskCompleteEvents,
   readSessionMetaCwd = readSessionMetaCwdFromFileHead,
-  sendNotification = sendTerminalNotification,
+  sendNotification = sendStickyDialogNotification,
   notifierCommand = NOTIFIER_BINARY_NAME,
   debounceMs = WATCHER_DEBOUNCE_DEFAULT_MS,
-  nowMs = () => Date.now()
+  nowMs = () => Date.now(),
+  startupMs = null,
+  firstSeenLookbackMs = WATCHER_FIRST_SEEN_LOOKBACK_MS,
+  firstSeenTailBytes = WATCHER_FIRST_SEEN_TAIL_BYTES
 } = {}) => {
   const cycleResult = {
     scannedFiles: 0,
@@ -676,6 +867,8 @@ export const runWatcherCycle = async ({
   }
   const normalizedDebounceMs = Math.max(0, Math.trunc(sanitizeFiniteNumber(debounceMs, WATCHER_DEBOUNCE_DEFAULT_MS)))
   const debounceEnabled = normalizedDebounceMs > 0
+  const currentCycleStartMs = Math.max(0, Math.trunc(sanitizeFiniteNumber(nowMs?.(), Date.now())))
+  const normalizedStartupMs = Math.max(0, Math.trunc(sanitizeFiniteNumber(startupMs, currentCycleStartMs)))
 
   let state = createCheckpointState()
   try {
@@ -707,7 +900,10 @@ export const runWatcherCycle = async ({
       const tailResult = await tailFileEvents({
         filePath,
         state,
-        fsPromises
+        fsPromises,
+        startupMs: normalizedStartupMs,
+        firstSeenLookbackMs,
+        firstSeenTailBytes
       })
       state = normalizeCheckpointState(tailResult.state)
 
@@ -799,7 +995,7 @@ export const runWatcherCycle = async ({
   }
 
   if (debounceEnabled) {
-    const currentMs = Math.max(0, Math.trunc(sanitizeFiniteNumber(nowMs?.(), Date.now())))
+    const currentMs = currentCycleStartMs
 
     if (latestDebounceCandidate !== null) {
       state.pendingNotification = {
@@ -911,7 +1107,7 @@ const WATCHER_USAGE = [
   `  ${WATCHER_INTERVAL_ENV_KEY}=1500`,
   `  ${WATCHER_DEBOUNCE_ENV_KEY}=3000`,
   "",
-  `Missing ${NOTIFIER_BINARY_NAME}? Run: ${WATCHER_REPAIR_COMMAND}`
+  "Shows a sticky Codex completion dialog and keeps only the latest prompt."
 ].join("\n")
 
 export const runWatcherCli = async ({
@@ -919,7 +1115,8 @@ export const runWatcherCli = async ({
   env = process.env,
   log = console.log,
   errorLog = console.error,
-  resolveNotifierCommand = resolveTerminalNotifierCommand
+  runCycle = runWatcherCycle,
+  runLoop = runWatcherLoop
 } = {}) => {
   if (argv.includes("--help") || argv.includes("-h")) {
     log(WATCHER_USAGE)
@@ -933,27 +1130,22 @@ export const runWatcherCli = async ({
     return resolvedConfig.exitCode
   }
 
-  const resolvedNotifier = await resolveNotifierCommand()
-  if (!resolvedNotifier.ok) {
-    errorLog(resolvedNotifier.error)
-    return resolvedNotifier.exitCode
-  }
-
   try {
+    const startupMs = Date.now()
     const cycleOptions = {
       sessionsRootPath: resolvedConfig.config.sessionsRootPath,
       stateFilePath: resolvedConfig.config.stateFilePath,
       subtitle: resolvedConfig.config.subtitle,
       debounceMs: resolvedConfig.config.debounceMs,
-      notifierCommand: resolvedNotifier.command
+      startupMs
     }
 
     if (runOnce) {
-      await runWatcherCycle(cycleOptions)
+      await runCycle(cycleOptions)
       return 0
     }
 
-    await runWatcherLoop({
+    await runLoop({
       intervalMs: resolvedConfig.config.intervalMs,
       cycleOptions
     })
@@ -967,7 +1159,7 @@ export const runWatcherCli = async ({
 const isDirectExecution = (() => {
   const entryPoint = typeof process.argv[1] === "string" ? path.resolve(process.argv[1]) : ""
   if (!entryPoint) return false
-  return entryPoint === fileURLToPath(import.meta.url)
+  return entryPoint === CURRENT_FILE_PATH
 })()
 
 if (isDirectExecution) {
