@@ -1,13 +1,11 @@
 import os from "node:os"
 import path from "node:path"
 import { promises as fs } from "node:fs"
-import { execFile as execFileCallback, spawn as spawnCallback } from "node:child_process"
+import { execFile as execFileCallback } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { promisify } from "node:util"
 
 const CURRENT_FILE_PATH = fileURLToPath(import.meta.url)
-const CURRENT_DIR_PATH = path.dirname(CURRENT_FILE_PATH)
-
 export const CODEX_EVENT_ENVELOPE_TYPE = "event_msg"
 export const CODEX_EVENT_PAYLOAD_KEY = "payload"
 export const CODEX_TASK_COMPLETE_EVENT_TYPE = "task_complete"
@@ -28,9 +26,6 @@ export const TASK_COMPLETE_MESSAGE_MAX_LENGTH = 200
 const TASK_COMPLETE_MESSAGE_TRUNCATION_SUFFIX = "..."
 export const WATCHER_STATE_DIR = path.join(os.homedir(), ".local", "state", "codex-notify-watcher")
 export const WATCHER_STATE_FILE = path.join(WATCHER_STATE_DIR, "state.json")
-export const STICKY_DIALOG_PID_FILE = path.join(WATCHER_STATE_DIR, "dialog.pid")
-export const STICKY_DIALOG_SCRIPT_PATH = path.join(CURRENT_DIR_PATH, "show-codex-dialog.applescript")
-export const STICKY_DIALOG_CLOSE_LABEL = "关闭"
 export const CHECKPOINT_STATE_VERSION = 1
 export const TURN_ID_WINDOW_LIMIT = 128
 export const WATCHER_SESSIONS_ROOT = path.join(os.homedir(), ".codex", "sessions")
@@ -41,12 +36,9 @@ export const WATCHER_DEBOUNCE_DEFAULT_MS = 3000
 export const WATCHER_FIRST_SEEN_LOOKBACK_MS = 60000
 export const WATCHER_FIRST_SEEN_TAIL_BYTES = 131072
 export const WATCHER_SUBTITLE = "Codex 任务完成"
-export const WATCHER_REPAIR_COMMAND = "brew install terminal-notifier"
 const WATCHER_SUBTITLE_SEPARATOR = " · "
 const SESSION_META_FILE_HEAD_MAX_BYTES = 8192
 
-const WATCHER_CONFIG_EXIT_CODE = 2
-const WATCHER_MISSING_NOTIFIER_ERROR = `missing required ${NOTIFIER_BINARY_NAME}. Install it with: ${WATCHER_REPAIR_COMMAND}`
 const execFile = promisify(execFileCallback)
 
 const sleepWithTimer = (durationMs, setTimeoutImpl = setTimeout) => new Promise((resolve) => {
@@ -63,128 +55,9 @@ const buildNotificationError = (reason) => ({
   reason: String(reason ?? "notification delivery failed")
 })
 
-const parsePositiveInteger = (value) => {
-  const normalized = Math.trunc(sanitizeFiniteNumber(value, NaN))
-  return Number.isInteger(normalized) && normalized > 0 ? normalized : null
-}
-
-const readStickyDialogPID = async ({
-  pidFilePath = STICKY_DIALOG_PID_FILE,
-  fsPromises = fs
-} = {}) => {
-  try {
-    const rawValue = await fsPromises.readFile(pidFilePath, "utf8")
-    return parsePositiveInteger(String(rawValue ?? "").trim())
-  } catch (error) {
-    if (error?.code === "ENOENT") return null
-    throw error
-  }
-}
-
-const isStickyDialogProcess = async ({
-  pid,
-  scriptPath = STICKY_DIALOG_SCRIPT_PATH,
-  execFileImpl = execFile
-} = {}) => {
-  const normalizedPID = parsePositiveInteger(pid)
-  if (normalizedPID === null) return false
-
-  try {
-    const result = await execFileImpl("/bin/ps", ["-p", String(normalizedPID), "-o", "command="])
-    const command = typeof result?.stdout === "string" ? result.stdout.trim() : ""
-    return command.includes("/usr/bin/osascript") && command.includes(String(scriptPath))
-  } catch {
-    return false
-  }
-}
-
-export const getStickyDialogCommand = ({
-  payload,
-  scriptPath = STICKY_DIALOG_SCRIPT_PATH,
-  title = NOTIFIER_TITLE,
-  closeLabel = STICKY_DIALOG_CLOSE_LABEL
-} = {}) => {
-  const normalizedPayload = buildNotificationPayload(payload)
-  return {
-    file: "/usr/bin/osascript",
-    args: [
-      String(scriptPath),
-      String(title),
-      normalizedPayload[NOTIFICATION_PAYLOAD_SUBTITLE_KEY],
-      normalizedPayload[NOTIFICATION_PAYLOAD_MESSAGE_KEY],
-      String(closeLabel)
-    ],
-    payload: normalizedPayload
-  }
-}
-
-export const sendStickyDialogNotification = async ({
-  payload,
-  pidFilePath = STICKY_DIALOG_PID_FILE,
-  scriptPath = STICKY_DIALOG_SCRIPT_PATH,
-  closeLabel = STICKY_DIALOG_CLOSE_LABEL,
-  fsPromises = fs,
-  execFileImpl = execFile,
-  spawnImpl = spawnCallback,
-  killImpl = process.kill.bind(process)
-} = {}) => {
-  const normalizedPayload = buildNotificationPayload(payload)
-
-  try {
-    const activePID = await readStickyDialogPID({ pidFilePath, fsPromises })
-    if (activePID !== null) {
-      const isManagedProcess = await isStickyDialogProcess({
-        pid: activePID,
-        scriptPath,
-        execFileImpl
-      })
-
-      if (isManagedProcess) {
-        try {
-          killImpl(activePID, "SIGTERM")
-        } catch (error) {
-          if (error?.code !== "ESRCH") throw error
-        }
-      }
-    }
-
-    await fsPromises.mkdir(path.dirname(pidFilePath), { recursive: true })
-    const command = getStickyDialogCommand({
-      payload: normalizedPayload,
-      scriptPath,
-      title: NOTIFIER_TITLE,
-      closeLabel
-    })
-    const child = spawnImpl(command.file, command.args, {
-      detached: true,
-      stdio: "ignore"
-    })
-
-    if (typeof child?.unref === "function") child.unref()
-
-    const childPID = parsePositiveInteger(child?.pid)
-    if (childPID === null) {
-      throw new Error("sticky dialog spawn returned invalid pid")
-    }
-
-    await fsPromises.writeFile(pidFilePath, `${childPID}
-`, "utf8")
-    return {
-      ok: true,
-      command: command.file,
-      args: command.args,
-      payload: normalizedPayload,
-      pid: childPID
-    }
-  } catch (error) {
-    const stderr = typeof error?.stderr === "string" ? error.stderr.trim() : ""
-    const stdout = typeof error?.stdout === "string" ? error.stdout.trim() : ""
-    return {
-      ok: false,
-      error: buildNotificationError(stderr || stdout || error?.message || "sticky dialog failed")
-    }
-  }
-}
+const escapeAppleScriptString = (value) => String(value)
+  .replace(/\\/g, "\\\\")
+  .replace(/"/g, '\\"')
 
 const resolveNotificationGroup = ({ group = NOTIFIER_GROUP } = {}) => {
   const normalizedGroup = String(group ?? "").trim()
@@ -208,34 +81,6 @@ export const getTerminalNotifierArguments = ({
   ]
 }
 
-export const resolveTerminalNotifierCommand = async ({
-  notifierBinary = NOTIFIER_BINARY_NAME,
-  execFileImpl = execFile
-} = {}) => {
-  try {
-    const result = await execFileImpl("/usr/bin/which", [String(notifierBinary)])
-    const commandPath = typeof result?.stdout === "string" ? result.stdout.trim() : ""
-    if (!commandPath) {
-      return {
-        ok: false,
-        exitCode: WATCHER_CONFIG_EXIT_CODE,
-        error: WATCHER_MISSING_NOTIFIER_ERROR
-      }
-    }
-
-    return {
-      ok: true,
-      command: commandPath
-    }
-  } catch {
-    return {
-      ok: false,
-      exitCode: WATCHER_CONFIG_EXIT_CODE,
-      error: WATCHER_MISSING_NOTIFIER_ERROR
-    }
-  }
-}
-
 export const sendTerminalNotification = async ({
   payload,
   notifierCommand = NOTIFIER_BINARY_NAME,
@@ -253,14 +98,95 @@ export const sendTerminalNotification = async ({
   } catch (error) {
     const stderr = typeof error?.stderr === "string" ? error.stderr.trim() : ""
     const stdout = typeof error?.stdout === "string" ? error.stdout.trim() : ""
-    const errorMessage = error?.code === "ENOENT"
-      ? WATCHER_MISSING_NOTIFIER_ERROR
-      : stderr || stdout || error?.message || "terminal-notifier failed"
+    const errorMessage = stderr || stdout || error?.message || "terminal-notifier failed"
 
     return {
       ok: false,
       error: buildNotificationError(errorMessage)
     }
+  }
+}
+
+export const getAppleScriptNotificationCommand = ({
+  payload,
+  title = NOTIFIER_TITLE,
+  sound = NOTIFIER_SOUND
+} = {}) => {
+  const normalizedPayload = buildNotificationPayload(payload)
+  const escapedMessage = escapeAppleScriptString(normalizedPayload[NOTIFICATION_PAYLOAD_MESSAGE_KEY])
+  const escapedTitle = escapeAppleScriptString(title)
+  const escapedSubtitle = escapeAppleScriptString(normalizedPayload[NOTIFICATION_PAYLOAD_SUBTITLE_KEY])
+  const escapedSound = escapeAppleScriptString(sound)
+  const subtitleClause = escapedSubtitle
+    ? ` subtitle \"${escapedSubtitle}\"`
+    : ""
+  const soundClause = escapedSound
+    ? ` sound name \"${escapedSound}\"`
+    : ""
+
+  return {
+    file: "/usr/bin/osascript",
+    args: [
+      "-e",
+      `display notification \"${escapedMessage}\" with title \"${escapedTitle}\"${subtitleClause}${soundClause}`
+    ],
+    payload: normalizedPayload
+  }
+}
+
+export const sendAppleScriptNotification = async ({
+  payload,
+  execFileImpl = execFile
+} = {}) => {
+  const command = getAppleScriptNotificationCommand({ payload })
+
+  try {
+    await execFileImpl(command.file, command.args)
+    return {
+      ok: true,
+      command: command.file,
+      args: command.args,
+      payload: command.payload
+    }
+  } catch (error) {
+    const stderr = typeof error?.stderr === "string" ? error.stderr.trim() : ""
+    const stdout = typeof error?.stdout === "string" ? error.stdout.trim() : ""
+    return {
+      ok: false,
+      error: buildNotificationError(stderr || stdout || error?.message || "osascript notification failed")
+    }
+  }
+}
+
+export const sendMacNotification = async ({
+  payload,
+  notifierCommand = NOTIFIER_BINARY_NAME,
+  execFileImpl = execFile
+} = {}) => {
+  const terminalNotificationResult = await sendTerminalNotification({
+    payload,
+    notifierCommand,
+    execFileImpl
+  })
+  if (terminalNotificationResult?.ok === true) return terminalNotificationResult
+
+  const appleScriptResult = await sendAppleScriptNotification({
+    payload,
+    execFileImpl
+  })
+  if (appleScriptResult?.ok === true) {
+    return {
+      ...appleScriptResult,
+      fallbackFrom: terminalNotificationResult?.error?.reason || "terminal-notifier failed"
+    }
+  }
+
+  return {
+    ok: false,
+    error: buildNotificationError([
+      terminalNotificationResult?.error?.reason,
+      appleScriptResult?.error?.reason
+    ].filter(Boolean).join("; ") || "notification delivery failed")
   }
 }
 
@@ -850,7 +776,7 @@ export const runWatcherCycle = async ({
   listFiles = listSessionJsonlFiles,
   tailFileEvents = tailFileTaskCompleteEvents,
   readSessionMetaCwd = readSessionMetaCwdFromFileHead,
-  sendNotification = sendStickyDialogNotification,
+  sendNotification = sendMacNotification,
   notifierCommand = NOTIFIER_BINARY_NAME,
   debounceMs = WATCHER_DEBOUNCE_DEFAULT_MS,
   nowMs = () => Date.now(),
@@ -1107,7 +1033,7 @@ const WATCHER_USAGE = [
   `  ${WATCHER_INTERVAL_ENV_KEY}=1500`,
   `  ${WATCHER_DEBOUNCE_ENV_KEY}=3000`,
   "",
-  "Shows a sticky Codex completion dialog and keeps only the latest prompt."
+  "Shows a non-blocking macOS completion notification banner."
 ].join("\n")
 
 export const runWatcherCli = async ({

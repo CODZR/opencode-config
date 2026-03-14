@@ -17,9 +17,6 @@ import {
   NOTIFICATION_PAYLOAD_MESSAGE_KEY,
   NOTIFICATION_PAYLOAD_SUBTITLE_KEY,
   NOTIFIER_TITLE,
-  STICKY_DIALOG_CLOSE_LABEL,
-  STICKY_DIALOG_PID_FILE,
-  STICKY_DIALOG_SCRIPT_PATH,
   TASK_COMPLETE_MESSAGE_FALLBACK,
   TASK_COMPLETE_MESSAGE_MAX_LENGTH,
   WATCHER_DEBOUNCE_DEFAULT_MS,
@@ -29,14 +26,15 @@ import {
   WATCHER_SUBTITLE,
   buildTaskCompleteNotificationPayload,
   createCheckpointState,
-  getStickyDialogCommand,
+  getAppleScriptNotificationCommand,
   listSessionJsonlFiles,
   parseTaskCompleteEvent,
   resolveWatcherConfigFromEnv,
   runWatcherCli,
   runWatcherCycle,
   runWatcherLoop,
-  sendStickyDialogNotification,
+  sendAppleScriptNotification,
+  sendMacNotification,
   tailFileTaskCompleteEvents,
   writeCheckpointStateAtomic
 } from "./codex-completion-watcher.mjs"
@@ -139,11 +137,8 @@ test("manager script: targets new service label and new env keys", async () => {
   assert.doesNotMatch(scriptText, /OPENCODE_NOTIFY_TOKEN/)
 })
 
-test("constants: sticky dialog defaults and checkpoint version remain stable", () => {
+test("constants: notifier defaults and checkpoint version remain stable", () => {
   assert.equal(NOTIFIER_TITLE, "Codex")
-  assert.equal(STICKY_DIALOG_CLOSE_LABEL, "关闭")
-  assert.equal(STICKY_DIALOG_PID_FILE.endsWith("dialog.pid"), true)
-  assert.equal(STICKY_DIALOG_SCRIPT_PATH.endsWith("show-codex-dialog.applescript"), true)
   assert.equal(CHECKPOINT_STATE_VERSION, 1)
   assert.deepEqual(createCheckpointState(), {
     version: 1,
@@ -224,92 +219,67 @@ test("config: resolveWatcherConfigFromEnv resolves defaults and overrides withou
   assert.equal(clampedConfig.config.debounceMs, 0)
 })
 
-test("dialog command: builds osascript invocation with close button", () => {
+test("notification command: builds osascript display notification invocation", () => {
   const payload = {
     [NOTIFICATION_PAYLOAD_ID_KEY]: "turn_notify",
     [NOTIFICATION_PAYLOAD_MESSAGE_KEY]: "Ship it",
     [NOTIFICATION_PAYLOAD_SUBTITLE_KEY]: "Codex 任务完成 · demo"
   }
 
-  const command = getStickyDialogCommand({ payload, scriptPath: "/tmp/show-codex-dialog.applescript" })
+  const command = getAppleScriptNotificationCommand({ payload })
 
   assert.equal(command.file, "/usr/bin/osascript")
   assert.deepEqual(command.args, [
-    "/tmp/show-codex-dialog.applescript",
-    "Codex",
-    "Codex 任务完成 · demo",
-    "Ship it",
-    "关闭"
+    "-e",
+    "display notification \"Ship it\" with title \"Codex\" subtitle \"Codex 任务完成 · demo\" sound name \"default\""
   ])
 })
 
-test("dialog delivery: sendStickyDialogNotification replaces active dialog and writes latest pid", async () => {
-  await withTempDir(async (tempDir) => {
-    const pidFilePath = path.join(tempDir, "dialog.pid")
-    await fs.writeFile(pidFilePath, "111\n", "utf8")
+test("mac notification: falls back to osascript when terminal-notifier fails", async () => {
+  const payload = {
+    [NOTIFICATION_PAYLOAD_ID_KEY]: "turn_notify",
+    [NOTIFICATION_PAYLOAD_MESSAGE_KEY]: "Ship it",
+    [NOTIFICATION_PAYLOAD_SUBTITLE_KEY]: "Codex 任务完成 · demo"
+  }
+  const execCalls = []
 
-    const payload = {
-      [NOTIFICATION_PAYLOAD_ID_KEY]: "turn_notify",
-      [NOTIFICATION_PAYLOAD_MESSAGE_KEY]: "Ship it",
-      [NOTIFICATION_PAYLOAD_SUBTITLE_KEY]: "Codex 任务完成 · demo"
-    }
-    const killCalls = []
-    const execCalls = []
-    const spawnCalls = []
-
-    const result = await sendStickyDialogNotification({
-      payload,
-      pidFilePath,
-      scriptPath: "/tmp/show-codex-dialog.applescript",
-      fsPromises: fs,
-      execFileImpl: async (file, args) => {
-        execCalls.push({ file, args })
-        return { stdout: "/usr/bin/osascript /tmp/show-codex-dialog.applescript Codex\n", stderr: "" }
-      },
-      killImpl: (pid, signal) => {
-        killCalls.push({ pid, signal })
-      },
-      spawnImpl: (file, args, options) => {
-        spawnCalls.push({ file, args, options })
-        return {
-          pid: 222,
-          unref() {}
-        }
+  const result = await sendMacNotification({
+    payload,
+    notifierCommand: "/opt/homebrew/bin/terminal-notifier",
+    execFileImpl: async (file, args) => {
+      execCalls.push({ file, args })
+      if (file === "/opt/homebrew/bin/terminal-notifier") {
+        const error = new Error("missing notifier")
+        error.code = "ENOENT"
+        throw error
       }
-    })
 
-    assert.equal(result.ok, true)
-    assert.deepEqual(execCalls, [{
-      file: "/bin/ps",
-      args: ["-p", "111", "-o", "command="]
-    }])
-    assert.deepEqual(killCalls, [{ pid: 111, signal: "SIGTERM" }])
-    assert.equal(spawnCalls.length, 1)
-    assert.equal(spawnCalls[0].file, "/usr/bin/osascript")
-    assert.deepEqual(spawnCalls[0].args, getStickyDialogCommand({
-      payload,
-      scriptPath: "/tmp/show-codex-dialog.applescript"
-    }).args)
-    assert.equal(spawnCalls[0].options.detached, true)
-    assert.equal(await fs.readFile(pidFilePath, "utf8"), "222\n")
+      return { stdout: "", stderr: "" }
+    }
   })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.command, "/usr/bin/osascript")
+  assert.equal(execCalls.length, 2)
+  assert.equal(execCalls[0].file, "/opt/homebrew/bin/terminal-notifier")
+  assert.equal(execCalls[1].file, "/usr/bin/osascript")
+  assert.match(result.fallbackFrom, /missing notifier/)
 })
 
-test("dialog delivery: sendStickyDialogNotification returns clear reason on spawn failure", async () => {
-  const result = await sendStickyDialogNotification({
+test("osascript delivery: sendAppleScriptNotification returns clear reason on failure", async () => {
+  const result = await sendAppleScriptNotification({
     payload: {
       id: "turn_missing",
       message: "Done",
       subtitle: WATCHER_SUBTITLE
     },
-    execFileImpl: async () => ({ stdout: "", stderr: "" }),
-    spawnImpl: () => {
-      throw new Error("spawn failed")
+    execFileImpl: async () => {
+      throw new Error("osascript failed")
     }
   })
 
   assert.equal(result.ok, false)
-  assert.equal(result.error.reason, "spawn failed")
+  assert.equal(result.error.reason, "osascript failed")
 })
 
 test("tailing: extracts task summary and cwd enrichment from same batch", async () => {
